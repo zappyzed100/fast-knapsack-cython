@@ -1,0 +1,10 @@
+
+    ==============================
+    PuLP Solver Result (Benchmark)
+    ==============================
+    Result Status: Optimal
+    Total Objective: 29307.0
+    Pure Item Value: 26807
+    Execution Time: 126.8148 seconds
+    ==============================
+    
