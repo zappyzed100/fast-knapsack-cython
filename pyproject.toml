@@ -1,0 +1,19 @@
+[project]
+name = "fast-knapsack-cython"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "black>=26.3.0",
+    "cython>=3.2.4",
+    "matplotlib>=3.10.8",
+    "minizinc>=0.10.0",
+    "numba>=0.64.0",
+    "numpy>=2.4.2",
+    "optuna>=4.7.0",
+    "pandas>=3.0.1",
+    "pulp>=3.3.0",
+    "setuptools>=82.0.0",
+    "tabulate>=0.10.0",
+]
