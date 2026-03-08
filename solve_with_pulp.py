@@ -103,7 +103,13 @@ def solve_with_pulp(csv_file="problem_data.csv", constraints_file="constraints.t
     """
     print(result_text)
 
-    with open("pulp_benchmark_results.txt", "a", encoding="utf-8") as f:
+    # 保存処理
+    output_dir = "result"
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+
+    output_path = os.path.join(output_dir, "pulp_results.txt")
+    with open(output_path, "a", encoding="utf-8") as f:
         f.write(result_text)
 
     return solve_time

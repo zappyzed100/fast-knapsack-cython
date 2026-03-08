@@ -86,11 +86,17 @@ def main():
     """
     print(result_output)
 
+    # ディレクトリ作成と保存
+    output_dir = "result"
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+
     # 結果をファイルに保存
-    with open("cython_hill_climbing_results.txt", "a", encoding="utf-8") as f:
+    output_path = os.path.join(output_dir, "cython_hill_climbing_results.txt")
+    with open(output_path, "a", encoding="utf-8") as f:
         f.write(result_output)
 
-    print(f"Results saved to 'cython_hill_climbing_results.txt'")
+    print(f"Results saved to '{output_path}'")
 
 
 if __name__ == "__main__":

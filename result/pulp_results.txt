@@ -5,6 +5,7 @@
     Result Status: Optimal
     Total Objective: 29307.0
     Pure Item Value: 26807
-    Execution Time: 126.8148 seconds
+    Execution Time: 125.2264 seconds
     ==============================
+    
     

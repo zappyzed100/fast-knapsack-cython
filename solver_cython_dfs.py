@@ -82,10 +82,17 @@ def main():
         "--------------------------------------------------\n"
     )
 
-    with open("cython_dfs_results.txt", "a", encoding="utf-8") as f:
+    # ディレクトリ作成と保存
+    output_dir = "result"
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+
+    output_path = os.path.join(output_dir, "cython_dfs_results.txt")
+
+    with open(output_path, "a", encoding="utf-8") as f:
         f.write(result_text)
 
-    print(f"Results appended to 'cython_dfs_results.txt'")
+    print(f"Results appended to '{output_path}'")
 
 
 if __name__ == "__main__":
