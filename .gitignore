@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+.venv/
+.python-version
+
+# Cython 中間生成物・バイナリ
+solver_cython/*.c
+solver_cython/*.html
+*.pyd
+*.so
+build/
+
+# データファイル（巨大なCSVなどは通常含めない）
+problem_data.csv
+problem_description.txt
+constraints.txt
+knapsack_tuning.db
