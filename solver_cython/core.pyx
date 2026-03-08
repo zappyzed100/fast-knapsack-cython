@@ -154,3 +154,91 @@ def solve_knapsack_sa(
                     current_groups_bit[g_add // 64] &= ~(1ULL << (g_add % 64))
 
     return best_score, np.array(best_sol)
+
+# --- 全探索 (DFS with Pruning) ---
+def solve_knapsack_dfs(
+    int[:] values,
+    int[:, :] weights,
+    int[:] capacities,
+    int[:] item_groups,
+    int[:, :] conflict_pairs,
+    int n_items,
+    int n_groups,
+    int group_max
+):
+    cdef unsigned long long[4] cur_bits = [0, 0, 0, 0]
+    cdef unsigned long long[200][4] conflict_masks
+    cdef int i, j, b
+    for i in range(200):
+        for b in range(4): conflict_masks[i][b] = 0
+    for i in range(conflict_pairs.shape[0]):
+        conflict_masks[conflict_pairs[i, 0]][conflict_pairs[i, 1] // 64] |= (1ULL << (conflict_pairs[i, 1] % 64))
+        conflict_masks[conflict_pairs[i, 1]][conflict_pairs[i, 0] // 64] |= (1ULL << (conflict_pairs[i, 0] % 64))
+
+    cdef char[:] current_sol = np.zeros(n_items, dtype=np.int8)
+    cdef int[:] group_counts = np.zeros(n_groups, dtype=np.int32)
+    cdef int[:] cur_w = np.zeros(3, dtype=np.int32)
+    cdef long best_score = 0
+    cdef char[:] best_sol = np.zeros(n_items, dtype=np.int8)
+    
+    cdef double start_time = time.time()
+    cdef long nodes_visited = 0
+    cdef int timeout_flag = 0
+
+    cdef long long[:] remain_max = np.zeros(n_items + 1, dtype=np.int64)
+    for i in range(n_items - 1, -1, -1):
+        remain_max[i] = remain_max[i+1] + values[i] + 50
+
+    def backtrack(int idx, long current_score):
+        nonlocal best_score, nodes_visited, timeout_flag
+        if timeout_flag: return
+
+        nodes_visited += 1
+        if nodes_visited % 100000 == 0:
+            if time.time() - start_time > 360:
+                timeout_flag = 1
+                return
+
+        if current_score > best_score:
+            best_score = current_score
+            best_sol[:] = current_sol[:]
+
+        if idx == n_items: return
+        if current_score + remain_max[idx] <= best_score: return
+
+        # 1. 入れる
+        cdef int g = item_groups[idx]
+        cdef int can_add = 1
+        for j in range(3):
+            if cur_w[j] + weights[idx, j] > capacities[j]:
+                can_add = 0; break
+        
+        if can_add and group_counts[g] < group_max:
+            if not ((cur_bits[0] & conflict_masks[g][0]) or \
+                    (cur_bits[1] & conflict_masks[g][1]) or \
+                    (cur_bits[2] & conflict_masks[g][2]) or \
+                    (cur_bits[3] & conflict_masks[g][3])):
+                
+                current_sol[idx] = 1
+                for j in range(3): cur_w[j] += weights[idx, j]
+                
+                group_counts[g] += 1
+                cur_bits[g // 64] |= (1ULL << (g % 64))
+                
+                score_inc = values[idx]
+                if group_counts[g] in [3, 4, 5]: score_inc += 50
+                
+                backtrack(idx + 1, current_score + score_inc)
+                
+                # 復元 (バグ修正: 個数が0になったときだけビットを下ろす)
+                group_counts[g] -= 1
+                if group_counts[g] == 0:
+                    cur_bits[g // 64] &= ~(1ULL << (g % 64))
+                for j in range(3): cur_w[j] -= weights[idx, j]
+                current_sol[idx] = 0
+
+        # 2. 入れない
+        backtrack(idx + 1, current_score)
+
+    backtrack(0, 0)
+    return best_score, np.array(best_sol), (timeout_flag == 1)
