@@ -1,82 +1,152 @@
 import numpy as np
 import pandas as pd
+import os
 
 
 def generate_and_save_problem(
-    n_items=2000, n_groups=200, n_conflicts=40, filename="problem_data.csv"
+    n_items=2000,
+    n_cliques=40,
+    clique_size=50,
+    n_random_conflicts=80,
+    n_groups=200,
+    filename="problem_data.csv",
 ):
     np.random.seed(42)
+
+    # 1. アイテム生成
+    w0 = np.random.randint(50, 150, n_items)
+    w1 = np.random.randint(50, 150, n_items)
+    w2 = np.random.randint(50, 150, n_items)
+    base_val = (w0 + w1 + w2) // 3
+    value = base_val + np.random.randint(-2, 3, n_items)
+
+    group_ids = np.repeat(np.arange(n_groups), n_items // n_groups)
 
     df = pd.DataFrame(
         {
             "item_id": np.arange(n_items),
-            "weight0": np.random.randint(10, 100, n_items),
-            "weight1": np.random.randint(10, 100, n_items),
-            "weight2": np.random.randint(10, 100, n_items),
-            "value": np.random.randint(10, 200, n_items),
-            "group_id": np.random.randint(0, n_groups, n_items),
+            "group_id": group_ids,
+            "weight0": w0,
+            "weight1": w1,
+            "weight2": w2,
+            "value": value,
         }
     )
-
     df.to_csv(filename, index=False)
 
-    # キャパシティ設定（合計の5%程度に絞ると難易度が上がります）
-    capacities = [int(df[f"weight{i}"].sum() * 0.05) for i in range(3)]
+    # キャパシティ設定
+    capacities = [int(df[f"weight{i}"].sum() * 0.02) for i in range(3)]
 
-    # 排他ペアの生成 (ランダムに40組)
-    # 矛盾（A-B, B-C, C-A）を避けるため、一貫性のあるペアを作る
-    all_groups = np.arange(n_groups)
-    np.random.shuffle(all_groups)
+    # 2. 高密度クリン生成
+    cliques = []
+    for _ in range(n_cliques):
+        members = np.random.choice(np.arange(n_items), clique_size, replace=False)
+        cliques.append(",".join(map(str, members)))
 
-    conflicts = []
-    for i in range(0, n_conflicts * 2, 2):
-        if i + 1 < n_groups:
-            conflicts.append((all_groups[i], all_groups[i + 1]))
+    # 3. 排他ペア生成
+    all_conflict_pairs = []
+    for i in range(200):
+        all_conflict_pairs.append((i, (i + 1) % 200))
+    for _ in range(n_random_conflicts):
+        p1, p2 = np.random.choice(np.arange(n_items), 2, replace=False)
+        all_conflict_pairs.append((int(p1), int(p2)))
 
+    # 4. 制約内容を constraints.txt へ保存
     with open("constraints.txt", "w") as f:
         f.write(f"capacities:{','.join(map(str, capacities))}\n")
-        f.write(f"group_max:6\n")  # 最大6個まで持てる設定
-        f.write(f"bonus_step:3,4,5\n")
-        f.write(f"bonus_value:50,50,50\n")  # 累積で50, 100, 150になる設定
-        conf_str = ";".join([f"{a},{b}" for a, b in conflicts])
+        f.write(f"cliques:{';'.join(cliques)}\n")
+        conf_str = ";".join([f"{p[0]},{p[1]}" for p in all_conflict_pairs])
         f.write(f"conflicts:{conf_str}\n")
+        f.write("bonus_thresholds:3,4,5\n")  # バリデーター用
+        f.write("bonus_value:50\n")
 
-    print(f"Generated {n_items} items. Capacities: {capacities}")
+    print(f"Generated {n_items} items with {n_groups} groups.")
+    return df, capacities, cliques, all_conflict_pairs
+
+
+def save_as_dzn(
+    df, capacities, cliques, conflicts, filename="solver_minizinc/data.dzn"
+):
+    os.makedirs(os.path.dirname(filename), exist_ok=True)
+    n_items = len(df)
+    n_groups = df["group_id"].max() + 1
+
+    with open(filename, "w") as f:
+        f.write(f"n_items = {n_items};\n")
+
+        # array1d(0..n_items-1, [...]) 形式に修正してインデックスを強制指定
+        f.write(
+            f"weight0 = array1d(0..{n_items-1}, [{', '.join(map(str, df['weight0']))}]);\n"
+        )
+        f.write(
+            f"weight1 = array1d(0..{n_items-1}, [{', '.join(map(str, df['weight1']))}]);\n"
+        )
+        f.write(
+            f"weight2 = array1d(0..{n_items-1}, [{', '.join(map(str, df['weight2']))}]);\n"
+        )
+        f.write(
+            f"value = array1d(0..{n_items-1}, [{', '.join(map(str, df['value']))}]);\n"
+        )
+        f.write(
+            f"group_id = array1d(0..{n_items-1}, [{', '.join(map(str, df['group_id']))}]);\n"
+        )
+
+        f.write(f"n_groups = {n_groups};\n")
+        f.write(f"bonus_val = 50;\n")
+
+        # キャパシティ
+        f.write(f"cap0 = {capacities[0]};\n")
+        f.write(f"cap1 = {capacities[1]};\n")
+        f.write(f"cap2 = {capacities[2]};\n")
+
+        # 制約定義
+        f.write(f"n_cliques = {len(cliques)};\n")
+        clique_str = ", ".join([f"{{{c}}}" for c in cliques])
+        f.write(f"clique_members = [{clique_str}];\n")
+
+        f.write(f"n_conflicts = {len(conflicts)};\n")
+        # 2次元配列も明示的にインデックスを指定
+        pair_rows = " | ".join([f"{p[0]}, {p[1]}" for p in conflicts])
+        f.write(
+            f"conflict_pairs = array2d(1..{len(conflicts)}, 1..2, [{', '.join([f'{p[0]}, {p[1]}' for p in conflicts])}]);\n"
+        )
+
+    print(f"MiniZinc data saved to {filename}")
 
 
 def save_problem_description(filename="problem_description.txt"):
     description = """
 ==================================================
-【業務シミュレーション】
-最適アイテム選定・多次元コスト管理問題 仕様書
+【ベンチマーク専用】
+高度過密制約・多段階ボーナス付きナップサック問題 仕様書
 ==================================================
 
 1. 目的（ゴール）:
-   限られた予算とルールの中で、「合計スコア」を最大化する組み合わせを見つける。
-   - 合計スコア = 「各アイテムの価値」の合計 + 「セットボーナス」の合計
+   3次元リソース制限を遵守し、合計価値（基本価値＋ボーナス）を最大化する。
+   Value ≈ Weight の設定により、LP緩和による効率的な枝刈りを困難にしている。
 
-2. 守らなければならないルール（制約）:
-   - 3つの厳しい制限（コスト）: 
-     「重さ」「体積」「消費電力」のような3つの異なる基準が設定されており、
-     そのすべてが決められた上限（キャパシティ）を超えてはいけない。
-   - 同じ属性の重複制限:
-     同じカテゴリー（グループ）に属するアイテムは、1つのグループにつき
-     最大6個までしか選ぶことができない。
-   - カテゴリー間の相性不一致（排他ルール）: 
-     「Aグループを1つでも選んだら、Bグループのものは一切選べない」
-     という犬猿の仲のペアが40組存在し、これらを同時に選ぶことはできない。
+2. 複雑な制約構造:
 
-3. 特別加点（セットボーナス）:
-   同じカテゴリーから多くのアイテムを選ぶと、ボーナスポイントが入る。
-   - 3つ選んだ場合： +50点
-   - 4つ選んだ場合： +100点（さらに50点追加）
-   - 5つ選んだ場合： +150点（さらに50点追加）
-   ※5個以上選んでもボーナスは一律150点（最大個数は6個のため）。
+   (a) 高密度クリン制約 (High-Density Overlapping Cliques):
+       - アイテムが複数の排他集合に重複所属。
+       - 汎用ソルバーの制約伝搬コストを最大化する設計。
 
-4. この問題の難しさ（技術的な背景）:
-   アイテム数が2,000個、組み合わせのパターンは「宇宙の星の数」を遥かに超える。
-   さらに「Aを選んだらBがダメ」「3つ以上でボーナス」といった複雑な条件が絡み合うため、
-   一般的な計算ソフトでは「迷路」に迷い込み、解答までに膨大な時間がかかる。
+   (b) ハイブリッド排他制約 (Cycle & Random Conflicts):
+       - 200要素の長周期循環排他に、ランダムなアイテム間排他を40ペア追加。
+       - 制約グラフの疎密を不均一にし、プレソルブ（前処理）による簡略化を封じている。
+
+   (c) 非線形多段階ボーナス (Multi-stage Bonus):
+       - 同一グループから 3, 4, 5個選択するごとに順次 +50点（最大150点）。
+       - MILP(CBC等)においては、判定用の補助バイナリ変数を600個(200g * 3)追加する必要があり、
+         探索空間の次元を意図的に押し上げている。
+
+3. 自作アルゴリズム（Cython/Numba）の優位性:
+
+   - ビット並列判定:
+     アイテム単位の複雑な排他判定を、定数時間のビット演算 (AND/OR) で処理。
+   - インクリメンタル・アップデート:
+     ボーナス計算を「全走査」ではなく「差分加算」で行うことで、
+     汎用ソルバーが数百の制約式で表現するロジックを O(1) で処理。
 ==================================================
 """
     with open(filename, "w", encoding="utf-8") as f:
@@ -84,5 +154,6 @@ def save_problem_description(filename="problem_description.txt"):
 
 
 if __name__ == "__main__":
-    generate_and_save_problem()
+    df, capacities, cliques, conflicts = generate_and_save_problem()
+    save_as_dzn(df, capacities, cliques, conflicts)
     save_problem_description()
