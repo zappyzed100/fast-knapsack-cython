@@ -7,7 +7,7 @@ import sys
 import datetime
 
 # コンパイル済みのCythonモジュールをインポート
-from solver_cython.core import solve_knapsack_sa
+from solver_cython.core import solve_knapsack_sa_parallel
 
 
 def validate_solution(
@@ -106,7 +106,7 @@ class CythonBenchmarker:
         start_time = time.perf_counter()
 
         # Cython関数の呼び出し
-        score, solution = solve_knapsack_sa(
+        score, solution = solve_knapsack_sa_parallel(
             self.val_arr,
             self.weight_arr,
             self.capacities,
