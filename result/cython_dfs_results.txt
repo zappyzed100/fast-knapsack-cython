@@ -1,5 +1,0 @@
---- Exact Solver Report (2026-03-09 04:29:02) ---
-Status: TIMEOUT (Partial Solution)
-Score: 10617
-Elapsed: 360.0010s
---------------------------------------------------
