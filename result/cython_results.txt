@@ -1,7 +1,14 @@
-[2026-03-11 19:16:48]
-Solver: cython
+[2026-03-12 02:54:52]
+Solver: cython_single_sa
 Status: SATISFIED
 Validation: VALID
-Objective Value (Score): 4351
-Execution Time: 0.1609 seconds
+Objective Value (Score): 4416
+Execution Time: 0.0327 seconds
+--------------------------------------------------
+[2026-03-12 02:54:59]
+Solver: cython_sa_parallel_evolution
+Status: SATISFIED
+Validation: VALID
+Objective Value (Score): 4523
+Execution Time: 7.7738 seconds
 --------------------------------------------------

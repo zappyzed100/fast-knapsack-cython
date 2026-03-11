@@ -1,14 +1,15 @@
-[2026-03-11 19:13:12]
-Solver: numba
+
+[2026-03-12 02:58:17]
+Solver: numba_single_sa
 Status: SATISFIED
 Validation: VALID
-Objective Value (Score): 4314
-Execution Time: 3.0903 seconds
+Objective Value (Score): 4357
+Execution Time: 2.9565 seconds
 --------------------------------------------------
-[2026-03-11 19:13:15]
-Solver: numba
+[2026-03-12 02:58:26]
+Solver: numba_hybrid_evolution
 Status: SATISFIED
 Validation: VALID
-Objective Value (Score): 4341
-Execution Time: 0.3302 seconds
+Objective Value (Score): 4559
+Execution Time: 9.2221 seconds
 --------------------------------------------------
