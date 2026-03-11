@@ -1,18 +1,14 @@
-
-==================================================
-Numba Local Search (Hill Climbing) Result
-==================================================
-Status: Completed (Max Iterations reached)
-Total Objective: 30214
-Execution Time: 3.2699 seconds
-Method: Numba Optimized JIT Solver
-==================================================
-
-==================================================
-Numba Local Search (Hill Climbing) Result
-==================================================
-Status: Completed (Max Iterations reached)
-Total Objective: 28986
-Execution Time: 0.2167 seconds
-Method: Numba Optimized JIT Solver
-==================================================
+[2026-03-11 19:13:12]
+Solver: numba
+Status: SATISFIED
+Validation: VALID
+Objective Value (Score): 4314
+Execution Time: 3.0903 seconds
+--------------------------------------------------
+[2026-03-11 19:13:15]
+Solver: numba
+Status: SATISFIED
+Validation: VALID
+Objective Value (Score): 4341
+Execution Time: 0.3302 seconds
+--------------------------------------------------
