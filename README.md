@@ -61,6 +61,6 @@ uv sync
 # データの生成
 uv run python scripts/generate_and_save_problem.py
 # Cythonのビルド
-uv run python solver_cython/setup.py build_ext --inplace
+uv run python src/solver_cython/setup.py build_ext --inplace
 # レポートの生成（各ソルバーの実行後に実施）
 uv run python generate_report.py

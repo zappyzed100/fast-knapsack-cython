@@ -5,7 +5,7 @@ import numpy as np
 ext_modules = [
     Extension(
         "solver_cython.core",  # インポート時の名前
-        sources=["solver_cython/core.pyx"],
+        sources=["src/solver_cython/core.pyx"],
         include_dirs=[np.get_include()],
     )
 ]

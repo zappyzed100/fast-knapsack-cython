@@ -4,8 +4,8 @@ __pycache__/
 .python-version
 
 # Cython 中間生成物・バイナリ
-solver_cython/*.c
-solver_cython/*.html
+src/solver_cython/*.c
+src/solver_cython/*.html
 *.pyd
 *.so
 build/

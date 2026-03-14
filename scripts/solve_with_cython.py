@@ -10,6 +10,8 @@ import datetime
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if PROJECT_ROOT not in sys.path:
     sys.path.append(PROJECT_ROOT)
+if os.path.join(PROJECT_ROOT, "src") not in sys.path:
+    sys.path.append(os.path.join(PROJECT_ROOT, "src"))
 
 # コンパイル済みのCythonモジュールをインポート
 from solver_cython.core import (
