@@ -10,9 +10,7 @@ DATA_DIR = PROJECT_ROOT / "data"
 
 def generate_and_save_problem(
     n_items=2000,
-    n_cliques=40,
-    clique_size=50,
-    n_random_conflicts=80,
+    n_random_conflicts=200,
     n_groups=200,
     filename=None,
     constraints_filename=None,
@@ -53,24 +51,20 @@ def generate_and_save_problem(
     # キャパシティ設定
     capacities = [int(df[f"weight{i}"].sum() * 0.02) for i in range(3)]
 
-    # 2. 高密度クリン生成
-    cliques = []
-    for _ in range(n_cliques):
-        members = np.random.choice(np.arange(n_items), clique_size, replace=False)
-        cliques.append(",".join(map(str, members)))
-
-    # 3. 排他ペア生成
+    # 2. グループ間禁止ペア生成（重複なし）
+    cliques = []  # MiniZinc互換のため保持（使用しない）
+    used_pairs = set()
     all_conflict_pairs = []
-    for i in range(200):
-        all_conflict_pairs.append((i, (i + 1) % 200))
-    for _ in range(n_random_conflicts):
-        p1, p2 = np.random.choice(np.arange(n_items), 2, replace=False)
-        all_conflict_pairs.append((int(p1), int(p2)))
+    while len(all_conflict_pairs) < n_random_conflicts:
+        p1, p2 = np.random.choice(np.arange(n_groups), 2, replace=False)
+        pair = (min(int(p1), int(p2)), max(int(p1), int(p2)))
+        if pair not in used_pairs:
+            used_pairs.add(pair)
+            all_conflict_pairs.append(pair)
 
-    # 4. 制約内容を data/constraints.txt へ保存
+    # 3. 制約内容を data/constraints.txt へ保存
     with open(constraints_filename, "w", encoding="utf-8") as f:
         f.write(f"capacities:{','.join(map(str, capacities))}\n")
-        f.write(f"cliques:{';'.join(cliques)}\n")
         conf_str = ";".join([f"{p[0]},{p[1]}" for p in all_conflict_pairs])
         f.write(f"conflicts:{conf_str}\n")
         f.write("bonus_thresholds:3,4,5\n")  # バリデーター用
@@ -119,10 +113,6 @@ def save_as_dzn(df, capacities, cliques, conflicts, filename=None):
         f.write(f"cap2 = {capacities[2]};\n")
 
         # 制約定義
-        f.write(f"n_cliques = {len(cliques)};\n")
-        clique_str = ", ".join([f"{{{c}}}" for c in cliques])
-        f.write(f"clique_members = [{clique_str}];\n")
-
         f.write(f"n_conflicts = {len(conflicts)};\n")
         f.write(
             f"conflict_pairs = array2d(1..{len(conflicts)}, 1..2, [{', '.join([f'{p[0]}, {p[1]}' for p in conflicts])}]);\n"
@@ -140,36 +130,37 @@ def save_problem_description(filename=None):
 
     description = """
 ==================================================
-【ベンチマーク専用】
-高度過密制約・多段階ボーナス付きナップサック問題 仕様書
+ナップサック問題（多制約・ボーナス付き）仕様書
 ==================================================
 
-1. 目的（ゴール）:
-   3次元リソース制限を遵守し、合計価値（基本価値＋ボーナス）を最大化する。
-   Value ≈ Weight の設定により、LP緩和による効率的な枝刈りを困難にしている。
+【問題のイメージ】
+  倉庫に積み込む荷物を2,000種類の候補から選ぶ選択問題です。
+  「どの荷物を選べば合計価値が最大になるか」を求めます。
+  ただし、容量制限・相性の悪い組み合わせ・まとめ買いボーナスが絡み合い、
+  総当たりでは到底解けない難しさがあります。
 
-2. 複雑な制約構造:
+【数値規模】
+  - 選択候補のアイテム数 : 2,000個
+  - カテゴリー（グループ）数 : 200種類
+  - 容量制限の種類 : 3種（重さ・体積・電力に相当）
 
-   (a) 高密度クリン制約 (High-Density Overlapping Cliques):
-       - アイテムが複数の排他集合に重複所属。
-       - 汎用ソルバーの制約伝搬コストを最大化する設計。
+【制約の種類と、なぜ難しいか】
 
-   (b) ハイブリッド排他制約 (Cycle & Random Conflicts):
-       - 200要素の長周期循環排他に、ランダムなアイテム間排他を40ペア追加。
-       - 制約グラフの疎密を不均一にし、プレソルブ（前処理）による簡略化を封じている。
+  (a) 3次元の容量制限
+      重さ・体積・電力の3種類それぞれの合計が上限を超えてはいけない。
+      さらに「価値と重さがほぼ同じ値」に設定してあるため、
+      「重いものから優先して省く」という単純な戦略が通用しない。
 
-   (c) 非線形多段階ボーナス (Multi-stage Bonus):
-       - 同一グループから 3, 4, 5個選択するごとに順次 +50点（最大150点）。
-       - MILP(CBC等)においては、判定用の補助バイナリ変数を600個(200g * 3)追加する必要があり、
-         探索空間の次元を意図的に押し上げている。
+  (b) グループ間禁止ペア（同時選択禁止ルール）
+      「グループAとグループBのアイテムは同時に選べない」という禁止ペアが200組ある。
+      禁止ペアはランダムに設定され・重複なしであり、
+      制約グラフの構造を不規則にすることでソルバーの前処理による簡略化を防いでいる。
 
-3. 自作アルゴリズム（Cython/Numba）の優位性:
+  (c) 段階ボーナス（まとめ買い加点）
+      同じカテゴリーから 3個・4個・5個 選ぶごとに +50点（最大 +150点）。
+      このボーナスを数式で扱うには「何個選んだか」を追跡する補助変数が
+      200グループ × 3段階 = 600個 必要になり、汎用ソルバーの探索空間が大きく膨らむ。
 
-   - ビット並列判定:
-     アイテム単位の複雑な排他判定を、定数時間のビット演算 (AND/OR) で処理。
-   - インクリメンタル・アップデート:
-     ボーナス計算を「全走査」ではなく「差分加算」で行うことで、
-     汎用ソルバーが数百の制約式で表現するロジックを O(1) で処理。
 ==================================================
 """
     with open(filename, "w", encoding="utf-8") as f:
