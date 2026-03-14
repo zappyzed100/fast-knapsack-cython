@@ -8,7 +8,7 @@ import datetime
 from numba import njit, uint64, int32, int8, float64, prange
 
 
-PROJECT_ROOT = os.path.abspath(os.path.dirname(__file__))
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
 
 # ---------------------------------------------------------
