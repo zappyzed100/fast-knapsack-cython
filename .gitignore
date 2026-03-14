@@ -2,6 +2,7 @@
 __pycache__/
 .venv/
 .python-version
+.vscode/
 
 # Cython 中間生成物・バイナリ
 src/solver_cython/*.c
