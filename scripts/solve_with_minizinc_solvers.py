@@ -87,7 +87,7 @@ def validate_solution_from_minizinc(
 
 
 def run_single_benchmark(solver_id, timeout_sec=100):
-    model_path = os.path.join(PROJECT_ROOT, "solver_minizinc", "problem.mzn")
+    model_path = os.path.join(PROJECT_ROOT, "src", "solver_minizinc", "problem.mzn")
     data_path = os.path.join(PROJECT_ROOT, "data", "data.dzn")
     result_dir = os.path.join(PROJECT_ROOT, "result")
 
