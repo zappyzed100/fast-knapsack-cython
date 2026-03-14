@@ -6,7 +6,7 @@ import pandas as pd
 from minizinc import Instance, Model, Solver
 
 
-PROJECT_ROOT = os.path.abspath(os.path.dirname(__file__))
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
 
 def validate_solution_from_minizinc(
