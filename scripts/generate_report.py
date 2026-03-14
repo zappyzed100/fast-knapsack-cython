@@ -73,7 +73,7 @@ def main():
     # 日本語文字化け対策（MS Gothic等が入っていない環境への配慮が必要な場合は適宜変更）
     plt.rcParams["font.family"] = "MS Gothic"
 
-    result_dir = os.path.join(PROJECT_ROOT, "result")
+    result_dir = os.path.join(PROJECT_ROOT, "results")
     target_files = [
         "cbc_results.txt",
         "cp_sat_results.txt",

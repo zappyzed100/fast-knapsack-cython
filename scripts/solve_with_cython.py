@@ -99,8 +99,8 @@ class CythonBenchmarker:
         self.n_groups = int(self.df["group_id"].max() + 1)
 
     def save_result(self, solver_name, score, elapsed, is_valid):
-        """result/cython_results.txt に結果を追記保存する"""
-        result_dir = "result"
+        """results/cython_results.txt に結果を追記保存する"""
+        result_dir = "results"
         os.makedirs(result_dir, exist_ok=True)
         output_path = os.path.join(result_dir, "cython_results.txt")
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
