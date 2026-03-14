@@ -73,8 +73,10 @@ def main():
     # 日本語文字化け対策（MS Gothic等が入っていない環境への配慮が必要な場合は適宜変更）
     plt.rcParams["font.family"] = "MS Gothic"
 
-    result_dir = os.path.join(PROJECT_ROOT, "results")
-    runs_dir = os.path.join(result_dir, "runs")
+    results_dir = os.path.join(PROJECT_ROOT, "results")
+    runs_dir = os.path.join(results_dir, "runs")
+    reports_dir = os.path.join(results_dir, "reports")
+    os.makedirs(reports_dir, exist_ok=True)
     target_files = [
         "cbc_results.txt",
         "cp_sat_results.txt",
@@ -143,12 +145,12 @@ def main():
     )
 
     # 画像保存
-    output_png = os.path.join(result_dir, "benchmark_comparison_jp.png")
+    output_png = os.path.join(reports_dir, "benchmark_comparison_jp.png")
     plt.savefig(output_png, bbox_inches="tight", dpi=300)
     print(f"\n比較画像を生成しました: {output_png}")
 
     # Markdown レポート作成
-    output_md = os.path.join(result_dir, "benchmark_report_jp.md")
+    output_md = os.path.join(reports_dir, "benchmark_report_jp.md")
     with open(output_md, "w", encoding="utf-8") as f:
         f.write("# ソルバー性能比較レポート\n\n")
         f.write(
