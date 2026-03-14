@@ -1,7 +1,10 @@
 import os
 import re
+import datetime
 import pandas as pd
 import matplotlib.pyplot as plt
+
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
 
 def parse_result_file(file_path):
@@ -70,7 +73,7 @@ def main():
     # 日本語文字化け対策（MS Gothic等が入っていない環境への配慮が必要な場合は適宜変更）
     plt.rcParams["font.family"] = "MS Gothic"
 
-    result_dir = "result"
+    result_dir = os.path.join(PROJECT_ROOT, "result")
     target_files = [
         "cbc_results.txt",
         "cp_sat_results.txt",
@@ -161,6 +164,4 @@ def main():
 
 
 if __name__ == "__main__":
-    import datetime
-
     main()
