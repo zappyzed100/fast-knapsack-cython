@@ -9,6 +9,16 @@ from numba import njit, uint64, int32, int8, float64, prange
 
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if PROJECT_ROOT not in sys.path:
+    sys.path.append(PROJECT_ROOT)
+if os.path.join(PROJECT_ROOT, "src") not in sys.path:
+    sys.path.append(os.path.join(PROJECT_ROOT, "src"))
+
+from utils.solution_eval import (
+    evaluate_solution,
+    format_solution_report,
+    parse_constraints,
+)
 
 
 # ---------------------------------------------------------
@@ -397,39 +407,26 @@ def solve_knapsack_evolution_numba(
     return last_best, pops[0]
 
 
-# ---------------------------------------------------------
-# 出力・バリデーター
-# ---------------------------------------------------------
-def validate_solution(
-    solution, values, weights, capacities, item_groups, conflict_pairs, group_max
+def save_result(
+    solver_name,
+    elapsed,
+    status,
+    evaluation,
+    objective_value=None,
+    full_output=True,
 ):
-    sel = np.where(solution == 1)[0]
-    if len(sel) == 0:
-        return False, 0
-    if any(np.sum(weights[sel], axis=0) > capacities):
-        return False, 0
-    u, counts = np.unique(item_groups[sel], return_counts=True)
-    if any(counts > group_max):
-        return False, 0
-    g_set = set(u)
-    for g1, g2 in conflict_pairs:
-        if g1 in g_set and g2 in g_set:
-            return False, 0
-    base = np.sum(values[sel])
-    bonus = np.sum([50 for c in counts if 3 <= c <= 5])
-    return True, int(base + bonus)
-
-
-def save_result(solver_name, score, elapsed, is_valid):
     result_dir = os.path.join(PROJECT_ROOT, "results", "runs")
     os.makedirs(result_dir, exist_ok=True)
     output_path = os.path.join(result_dir, "numba_results.txt")
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    result_text = (
-        f"[{timestamp}]\nSolver: {solver_name}\nStatus: {'SATISFIED' if is_valid else 'INFEASIBLE'}\n"
-        f"Validation: {'VALID' if is_valid else 'INVALID'}\nObjective Value (Score): {score}\nExecution Time: {elapsed:.4f} seconds\n"
-        + "-" * 50
-        + "\n"
+    result_text = format_solution_report(
+        solver_name=solver_name,
+        elapsed_sec=elapsed,
+        status=status,
+        evaluation=evaluation,
+        objective_value=objective_value,
+        timestamp=timestamp,
+        full_output=full_output,
     )
     with open(output_path, "a", encoding="utf-8") as f:
         f.write(result_text)
@@ -441,23 +438,9 @@ class NumbaBenchmarker:
         self.csv_path = os.path.join(PROJECT_ROOT, "data", "problem_data.csv")
         self.constraints_path = os.path.join(PROJECT_ROOT, "data", "constraints.txt")
 
-    def run(self, iterations=10000000, patience=10):
+    def run(self, iterations=10000000, patience=10, full_output=True):
         df = pd.read_csv(self.csv_path)
-        with open(self.constraints_path, "r") as f:
-            lines = {
-                line.split(":")[0]: line.split(":")[1].strip()
-                for line in f
-                if ":" in line
-            }
-        caps = np.array(list(map(int, lines["capacities"].split(","))), dtype=np.int32)
-        confs = np.array(
-            [
-                tuple(map(int, c.split(",")))
-                for c in lines.get("conflicts", "").split(";")
-                if c
-            ],
-            dtype=np.int32,
-        )
+        caps, confs = parse_constraints(self.constraints_path)
         v, w, g = (
             df["value"].values.astype(np.int32),
             df[["weight0", "weight1", "weight2"]].values.astype(np.int32),
@@ -483,8 +466,16 @@ class NumbaBenchmarker:
             42,
         )
         el1 = time.perf_counter() - st1
-        valid1, s1 = validate_solution(sol_sa, v, w, caps, g, confs, 10)
-        save_result("numba_single_sa", s1, el1, valid1)
+        eval1 = evaluate_solution(sol_sa, v, w, caps, g, confs, 10)
+        status1 = "SATISFIED" if eval1["is_valid"] else "INFEASIBLE"
+        save_result(
+            "numba_single_sa",
+            el1,
+            status1,
+            eval1,
+            objective_value=int(score_sa),
+            full_output=full_output,
+        )
 
         # 2. 進化計算
         st2 = time.perf_counter()
@@ -506,13 +497,31 @@ class NumbaBenchmarker:
             patience=patience,
         )
         el2 = time.perf_counter() - st2
-        valid2, s2 = validate_solution(sol_evo, v, w, caps, g, confs, 10)
-        save_result("numba_hybrid_evolution", s2, el2, valid2)
+        eval2 = evaluate_solution(sol_evo, v, w, caps, g, confs, 10)
+        status2 = "SATISFIED" if eval2["is_valid"] else "INFEASIBLE"
+        save_result(
+            "numba_hybrid_evolution",
+            el2,
+            status2,
+            eval2,
+            objective_value=int(score_evo),
+            full_output=full_output,
+        )
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--iter", type=int, default=10000000)
     parser.add_argument("--patience", type=int, default=10)
+    parser.add_argument(
+        "--full-output",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Output full selected item/group lists (default: true). Use --no-full-output for preview mode.",
+    )
     args = parser.parse_args()
-    NumbaBenchmarker().run(iterations=args.iter, patience=args.patience)
+    NumbaBenchmarker().run(
+        iterations=args.iter,
+        patience=args.patience,
+        full_output=args.full_output,
+    )

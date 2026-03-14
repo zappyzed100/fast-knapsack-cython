@@ -1,92 +1,26 @@
 import os
 import datetime
 import time
+import argparse
 import numpy as np
 import pandas as pd
 from minizinc import Instance, Model, Solver
 
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if PROJECT_ROOT not in os.sys.path:
+    os.sys.path.append(PROJECT_ROOT)
+if os.path.join(PROJECT_ROOT, "src") not in os.sys.path:
+    os.sys.path.append(os.path.join(PROJECT_ROOT, "src"))
+
+from utils.solution_eval import (
+    evaluate_solution,
+    format_solution_report,
+    parse_constraints,
+)
 
 
-def validate_solution_from_minizinc(
-    result,
-    csv_path=os.path.join(PROJECT_ROOT, "data", "problem_data.csv"),
-    constraints_path=os.path.join(PROJECT_ROOT, "data", "constraints.txt"),
-):
-    """
-    MiniZincの実行結果が制約を満たしているか独立して検証する
-    """
-    if result.solution is None:
-        return False, "No solution to validate."
-
-    # --- データのロード ---
-    df = pd.read_csv(csv_path)
-    values = df["value"].values
-    weights = df[["weight0", "weight1", "weight2"]].values
-    item_groups = df["group_id"].values
-
-    with open(constraints_path, "r") as f:
-        lines = {l.split(":")[0]: l.split(":")[1].strip() for l in f if ":" in l}
-    capacities = np.array(list(map(int, lines["capacities"].split(","))))
-    conflict_pairs = [
-        tuple(map(int, c.split(",")))
-        for c in lines.get("conflicts", "").split(";")
-        if c
-    ]
-    group_max = 10
-    bonus_val = 50
-
-    # MiniZincのモデルで定義されている変数名（例: x）に合わせて取得
-    # 配列形式で出力されていることを想定
-    sol = np.array(result.solution.x, dtype=np.int8)
-    selected_indices = np.where(sol == 1)[0]
-
-    is_valid = True
-    error_msg = []
-
-    # 1. 重量制約
-    total_weights = np.sum(weights[selected_indices], axis=0)
-    for i, (tw, cap) in enumerate(zip(total_weights, capacities)):
-        if tw > cap:
-            is_valid = False
-            error_msg.append(f"Capacity {i} Over: {tw} > {cap}")
-
-    # 2. グループ最大数制約
-    u_groups, counts = np.unique(item_groups[selected_indices], return_counts=True)
-    for g, count in zip(u_groups, counts):
-        if count > group_max:
-            is_valid = False
-            error_msg.append(f"Group {g} Count Over: {count} > {group_max}")
-
-    # --- 3. 排他制約 ---
-    # conflict_pairs はアイテムIDのペア (0..1999) を含んでいる
-    for idx1, idx2 in conflict_pairs:
-        # MiniZincの解配列 sol において、衝突する両方のアイテムが選ばれているか確認
-        if sol[idx1] == 1 and sol[idx2] == 1:
-            is_valid = False
-            # アイテム単位の衝突としてメッセージを出す
-            error_msg.append(f"Conflict: Item {idx1} and {idx2} both selected")
-
-    # 4. スコア再計算 (ボーナス: 3~5個選択時)
-    base_score = np.sum(values[selected_indices])
-    bonus_score = np.sum([bonus_val for c in counts if 3 <= c <= 5])
-    total_score = base_score + bonus_score
-
-    # ソルバーの目的関数値との照合
-    if result.objective is not None and abs(total_score - result.objective) > 1e-5:
-        error_msg.append(
-            f"Score Mismatch: Solver={result.objective}, Validated={total_score}"
-        )
-
-    status_str = "VALID" if is_valid else "INVALID: " + " | ".join(error_msg)
-    print(f"[*] Validation Result: {status_str}")
-    print(f"[*] Re-calculated Score: {total_score}")
-
-    return is_valid, status_str
-
-
-def run_single_benchmark(solver_id, timeout_sec=100):
+def run_single_benchmark(solver_id, timeout_sec=100, full_output=True):
     model_path = os.path.join(PROJECT_ROOT, "src", "solver_minizinc", "problem.mzn")
     data_path = os.path.join(PROJECT_ROOT, "data", "data.dzn")
     result_dir = os.path.join(PROJECT_ROOT, "results", "runs")
@@ -113,23 +47,53 @@ def run_single_benchmark(solver_id, timeout_sec=100):
         elapsed_time = end_time - start_time
         status = str(result.status)
 
-        # --- 出力チェックの実行 ---
-        is_valid, validation_msg = validate_solution_from_minizinc(result)
-
-        objective = (
-            result.objective if result.objective is not None else "No Solution Found"
+        df = pd.read_csv(os.path.join(PROJECT_ROOT, "data", "problem_data.csv"))
+        capacities, conflicts = parse_constraints(
+            os.path.join(PROJECT_ROOT, "data", "constraints.txt")
         )
+        values = df["value"].values.astype(np.int32)
+        weights = df[["weight0", "weight1", "weight2"]].values.astype(np.int32)
+        groups = df["group_id"].values.astype(np.int32)
+
+        if result.solution is not None and hasattr(result.solution, "x"):
+            sol = np.array(result.solution.x, dtype=np.int8)
+            evaluation = evaluate_solution(
+                sol,
+                values,
+                weights,
+                capacities,
+                groups,
+                conflicts,
+                group_max=10,
+            )
+        else:
+            evaluation = {
+                "is_valid": False,
+                "errors": ["No solution produced"],
+                "selected_count": 0,
+                "selected_indices": np.zeros(0, dtype=np.int32),
+                "selected_groups": np.zeros(0, dtype=np.int32),
+                "group_counts": np.zeros(0, dtype=np.int32),
+                "total_weights": np.zeros(3, dtype=np.int64),
+                "capacities": capacities.astype(np.int64),
+                "base_score": 0,
+                "bonus_score": 0,
+                "total_score": 0,
+                "conflict_violation_count": 0,
+                "conflict_violations": [],
+            }
 
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        result_text = f"""[{timestamp}]
-Solver: {solver_id}
-Status: {status}
-Validation: {validation_msg}
-Objective Value (Score): {objective}
-Execution Time: {elapsed_time:.4f} seconds
---------------------------------------------------
-"""
+        result_text = format_solution_report(
+            solver_name=solver_id,
+            elapsed_sec=elapsed_time,
+            status=status,
+            evaluation=evaluation,
+            objective_value=result.objective,
+            timestamp=timestamp,
+            full_output=full_output,
+        )
         print(result_text)
 
         with open(output_path, "a", encoding="utf-8") as f:
@@ -146,6 +110,20 @@ Execution Time: {elapsed_time:.4f} seconds
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--timeout", type=int, default=100)
+    parser.add_argument(
+        "--full-output",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Output full selected item/group lists (default: true). Use --no-full-output for preview mode.",
+    )
+    args = parser.parse_args()
+
     solvers = ["cp-sat", "gecode", "cbc"]
     for solver_name in solvers:
-        run_single_benchmark(solver_name)
+        run_single_benchmark(
+            solver_name,
+            timeout_sec=args.timeout,
+            full_output=args.full_output,
+        )

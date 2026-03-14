@@ -18,46 +18,11 @@ from solver_cython.core import (
     solve_knapsack_sa_parallel,
     solve_knapsack_sa,
 )
-
-
-def validate_solution(
-    solution,
-    values,
-    weights,
-    capacities,
-    item_groups,
-    conflict_pairs,
-    group_max,
-    bonus_val=50,
-):
-    """最終解が全制約を遵守しているか検証する"""
-    is_valid = True
-    selected_indices = np.where(solution == 1)[0]
-    if len(selected_indices) == 0:
-        return False, 0
-
-    # 1. 重量制約
-    total_weights = np.sum(weights[selected_indices], axis=0)
-    if any(total_weights > capacities):
-        is_valid = False
-
-    # 2. グループ最大数制約
-    unique_groups, counts = np.unique(item_groups[selected_indices], return_counts=True)
-    if any(counts > group_max):
-        is_valid = False
-
-    # 3. 排他制約
-    selected_groups_set = set(unique_groups)
-    for i in range(conflict_pairs.shape[0]):
-        g1, g2 = conflict_pairs[i]
-        if g1 in selected_groups_set and g2 in selected_groups_set:
-            is_valid = False
-
-    # 4. スコア計算
-    base_score = np.sum(values[selected_indices])
-    bonus_score = np.sum([bonus_val for c in counts if 3 <= c <= 5])
-
-    return is_valid, int(base_score + bonus_score)
+from utils.solution_eval import (
+    evaluate_solution,
+    format_solution_report,
+    parse_constraints,
+)
 
 
 class CythonBenchmarker:
@@ -72,24 +37,7 @@ class CythonBenchmarker:
             print(f"\n[!] Error: {self.csv_path} not found.")
             sys.exit(1)
         self.df = pd.read_csv(self.csv_path)
-        with open(self.constraints_path, "r") as f:
-            lines = {
-                line.split(":")[0]: line.split(":")[1].strip()
-                for line in f
-                if ":" in line
-            }
-        self.capacities = np.array(
-            list(map(int, lines["capacities"].split(","))), dtype=np.int32
-        )
-        conf_raw = lines.get("conflicts", "")
-        self.conflicts = (
-            np.array(
-                [tuple(map(int, c.split(","))) for c in conf_raw.split(";") if c],
-                dtype=np.int32,
-            )
-            if conf_raw
-            else np.zeros((0, 2), dtype=np.int32)
-        )
+        self.capacities, self.conflicts = parse_constraints(self.constraints_path)
         self.val_arr = self.df["value"].values.astype(np.int32)
         self.weight_arr = self.df[["weight0", "weight1", "weight2"]].values.astype(
             np.int32
@@ -98,27 +46,36 @@ class CythonBenchmarker:
         self.n_items = len(self.df)
         self.n_groups = int(self.df["group_id"].max() + 1)
 
-    def save_result(self, solver_name, score, elapsed, is_valid):
+    def save_result(
+        self,
+        solver_name,
+        elapsed,
+        status,
+        evaluation,
+        objective_value=None,
+        full_output=True,
+    ):
         """results/runs/cython_results.txt に結果を追記保存する"""
         result_dir = os.path.join(PROJECT_ROOT, "results", "runs")
         os.makedirs(result_dir, exist_ok=True)
         output_path = os.path.join(result_dir, "cython_results.txt")
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        result_text = (
-            f"[{timestamp}]\n"
-            f"Solver: {solver_name}\n"
-            f"Status: {'SATISFIED' if is_valid else 'INFEASIBLE'}\n"
-            f"Validation: {'VALID' if is_valid else 'INVALID'}\n"
-            f"Objective Value (Score): {score}\n"
-            f"Execution Time: {elapsed:.4f} seconds\n" + "-" * 50 + "\n"
+        result_text = format_solution_report(
+            solver_name=solver_name,
+            elapsed_sec=elapsed,
+            status=status,
+            evaluation=evaluation,
+            objective_value=objective_value,
+            timestamp=timestamp,
+            full_output=full_output,
         )
 
         with open(output_path, "a", encoding="utf-8") as f:
             f.write(result_text)
         print(result_text)
 
-    def run(self, iterations=10000000, patience=10):
+    def run(self, iterations=10000000, patience=10, full_output=True):
         self.load_all_data()
 
         # ---------------------------------------------------------
@@ -146,7 +103,7 @@ class CythonBenchmarker:
             rand_flt,
         )
         el1 = time.perf_counter() - st1
-        valid1, v_score1 = validate_solution(
+        eval1 = evaluate_solution(
             sol1,
             self.val_arr,
             self.weight_arr,
@@ -155,7 +112,15 @@ class CythonBenchmarker:
             self.conflicts,
             self.group_max,
         )
-        self.save_result("cython_single_sa", v_score1, el1, valid1)
+        status1 = "SATISFIED" if eval1["is_valid"] else "INFEASIBLE"
+        self.save_result(
+            "cython_single_sa",
+            el1,
+            status1,
+            eval1,
+            objective_value=int(score1),
+            full_output=full_output,
+        )
 
         # ---------------------------------------------------------
         # 2. 並列進化計算 (Hybrid GA-SA)
@@ -181,7 +146,7 @@ class CythonBenchmarker:
             patience=patience,
         )
         el2 = time.perf_counter() - st2
-        valid2, v_score2 = validate_solution(
+        eval2 = evaluate_solution(
             sol2,
             self.val_arr,
             self.weight_arr,
@@ -190,14 +155,32 @@ class CythonBenchmarker:
             self.conflicts,
             self.group_max,
         )
-        self.save_result("cython_sa_parallel_evolution", v_score2, el2, valid2)
+        status2 = "SATISFIED" if eval2["is_valid"] else "INFEASIBLE"
+        self.save_result(
+            "cython_sa_parallel_evolution",
+            el2,
+            status2,
+            eval2,
+            objective_value=int(score2),
+            full_output=full_output,
+        )
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--iter", type=int, default=10000000)
     parser.add_argument("--patience", type=int, default=10)
+    parser.add_argument(
+        "--full-output",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Output full selected item/group lists (default: true). Use --no-full-output for preview mode.",
+    )
     args = parser.parse_args()
 
     bench = CythonBenchmarker()
-    bench.run(iterations=args.iter, patience=args.patience)
+    bench.run(
+        iterations=args.iter,
+        patience=args.patience,
+        full_output=args.full_output,
+    )
