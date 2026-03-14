@@ -245,12 +245,13 @@ def _greedy_crossover_numba(
     capacities,
     conflict_masks,
     n_items,
+    n_groups,
     group_max,
     s_idx_desc,
 ):
     child = np.zeros(n_items, dtype=int8)
     cw = np.zeros(3, dtype=int32)
-    gc = np.zeros(2000, dtype=int32)
+    gc = np.zeros(n_groups, dtype=int32)
     gbits = np.zeros(16, dtype=uint64)
     for k in range(n_items):
         idx = s_idx_desc[k]
@@ -290,26 +291,35 @@ def solve_knapsack_evolution_numba(
     n_items,
     n_groups,
     group_max,
-    pop_size,
-    iterations,
-    patience,
+    pop_size=20,
+    rand_add_size=20,
+    crossover_size=50,
+    max_generations=1000,
+    iter_per_ind=1000000,
+    patience=10,
 ):
+    total_pop = pop_size + rand_add_size + crossover_size
     conflict_masks = _init_masks_numba(conflict_pairs)
     densities = values.astype(float64) / (
         1.0 + weights[:, 0] + weights[:, 1] + weights[:, 2]
     )
     s_idx_desc = np.argsort(-densities).astype(int32)
 
-    pops = np.zeros((pop_size, n_items), dtype=int8)
-    for i in range(pop_size):
-        pops[i] = initial_sol.copy()
-    scores = np.zeros(pop_size, dtype=float64)
+    pops = np.zeros((total_pop, n_items), dtype=int8)
+    temp_pops = np.zeros((pop_size, n_items), dtype=int8)
+    scores = np.zeros(total_pop, dtype=float64)
+    temp_scores = np.zeros(pop_size, dtype=float64)
+    if np.any(initial_sol):
+        for i in range(pop_size):
+            pops[i] = initial_sol.copy()
+
     last_best = -1.0
     no_improvement = 0
-    gen = 0
+    base_seed = 42
 
-    while True:
-        for i in prange(pop_size):
+    for gen in range(max_generations):
+        for i in prange(pop_size, pop_size + rand_add_size):
+            pops[i] = np.zeros(n_items, dtype=int8)
             s, sol = _run_sa_numba(
                 pops[i],
                 values,
@@ -319,10 +329,49 @@ def solve_knapsack_evolution_numba(
                 n_items,
                 n_groups,
                 group_max,
-                iterations,
+                iter_per_ind,
                 conflict_masks,
                 gen,
-                i + gen * pop_size,
+                base_seed ^ (i * 777 + gen),
+            )
+            scores[i] = s
+            pops[i] = sol
+
+        cx1 = np.random.randint(0, pop_size + rand_add_size, crossover_size).astype(
+            int32
+        )
+        cx2 = np.random.randint(0, pop_size + rand_add_size, crossover_size).astype(
+            int32
+        )
+        for i in prange(crossover_size):
+            pop_idx = pop_size + rand_add_size + i
+            pops[pop_idx] = _greedy_crossover_numba(
+                pops[cx1[i]],
+                pops[cx2[i]],
+                item_groups,
+                weights,
+                capacities,
+                conflict_masks,
+                n_items,
+                n_groups,
+                group_max,
+                s_idx_desc,
+            )
+
+        for i in prange(total_pop):
+            s, sol = _run_sa_numba(
+                pops[i],
+                values,
+                weights,
+                capacities,
+                item_groups,
+                n_items,
+                n_groups,
+                group_max,
+                iter_per_ind,
+                conflict_masks,
+                gen,
+                base_seed ^ (i * 123 + gen),
             )
             scores[i] = s
             pops[i] = sol
@@ -337,23 +386,14 @@ def solve_knapsack_evolution_numba(
         if no_improvement >= patience:
             break
 
-        new_pops = np.zeros_like(pops)
-        new_pops[0] = pops[sorted_idx[0]].copy()
-        for i in range(1, pop_size):
-            p2_idx = np.random.randint(0, pop_size)
-            new_pops[i] = _greedy_crossover_numba(
-                pops[sorted_idx[0]],
-                pops[p2_idx],
-                item_groups,
-                weights,
-                capacities,
-                conflict_masks,
-                n_items,
-                group_max,
-                s_idx_desc,
-            )
-        pops = new_pops
-        gen += 1
+        for i in range(pop_size):
+            temp_pops[i] = pops[sorted_idx[i]].copy()
+            temp_scores[i] = scores[sorted_idx[i]]
+
+        for i in range(pop_size):
+            pops[i] = temp_pops[i]
+            scores[i] = temp_scores[i]
+
     return last_best, pops[0]
 
 
@@ -401,7 +441,7 @@ class NumbaBenchmarker:
         self.csv_path = os.path.join(PROJECT_ROOT, "data", "problem_data.csv")
         self.constraints_path = os.path.join(PROJECT_ROOT, "data", "constraints.txt")
 
-    def run(self, iterations=10000000):
+    def run(self, iterations=10000000, patience=10):
         df = pd.read_csv(self.csv_path)
         with open(self.constraints_path, "r") as f:
             lines = {
@@ -449,7 +489,21 @@ class NumbaBenchmarker:
         # 2. 進化計算
         st2 = time.perf_counter()
         score_evo, sol_evo = solve_knapsack_evolution_numba(
-            sol_sa, v, w, caps, g, confs, n_items, n_groups, 10, 10, iterations, 10
+            sol_sa,
+            v,
+            w,
+            caps,
+            g,
+            confs,
+            n_items,
+            n_groups,
+            10,
+            pop_size=20,
+            rand_add_size=20,
+            crossover_size=50,
+            max_generations=1000,
+            iter_per_ind=iterations,
+            patience=patience,
         )
         el2 = time.perf_counter() - st2
         valid2, s2 = validate_solution(sol_evo, v, w, caps, g, confs, 10)
@@ -459,5 +513,6 @@ class NumbaBenchmarker:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--iter", type=int, default=10000000)
+    parser.add_argument("--patience", type=int, default=10)
     args = parser.parse_args()
-    NumbaBenchmarker().run(iterations=args.iter)
+    NumbaBenchmarker().run(iterations=args.iter, patience=args.patience)
