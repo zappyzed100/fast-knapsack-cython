@@ -37,7 +37,9 @@ class CythonBenchmarker:
             print(f"\n[!] Error: {self.csv_path} not found.")
             sys.exit(1)
         self.df = pd.read_csv(self.csv_path)
-        self.capacities, self.conflicts = parse_constraints(self.constraints_path)
+        self.capacities, self.conflicts, self.bonus_thresholds, self.bonus_value = (
+            parse_constraints(self.constraints_path)
+        )
         self.val_arr = self.df["value"].values.astype(np.int32)
         self.weight_arr = self.df[["weight0", "weight1", "weight2"]].values.astype(
             np.int32
@@ -97,6 +99,10 @@ class CythonBenchmarker:
             self.n_items,
             self.n_groups,
             self.group_max,
+            int(self.bonus_thresholds[0]),
+            int(self.bonus_thresholds[1]),
+            int(self.bonus_thresholds[2]),
+            float(self.bonus_value),
             iterations,
             rand_add,
             rand_rem,
@@ -111,6 +117,8 @@ class CythonBenchmarker:
             self.group_arr,
             self.conflicts,
             self.group_max,
+            bonus_val=self.bonus_value,
+            bonus_thresholds=self.bonus_thresholds,
         )
         status1 = "SATISFIED" if eval1["is_valid"] else "INFEASIBLE"
         self.save_result(
@@ -138,6 +146,10 @@ class CythonBenchmarker:
             self.n_items,
             self.n_groups,
             self.group_max,
+            int(self.bonus_thresholds[0]),
+            int(self.bonus_thresholds[1]),
+            int(self.bonus_thresholds[2]),
+            float(self.bonus_value),
             pop_size=20,
             rand_add_size=20,
             crossover_size=50,
@@ -154,6 +166,8 @@ class CythonBenchmarker:
             self.group_arr,
             self.conflicts,
             self.group_max,
+            bonus_val=self.bonus_value,
+            bonus_thresholds=self.bonus_thresholds,
         )
         status2 = "SATISFIED" if eval2["is_valid"] else "INFEASIBLE"
         self.save_result(

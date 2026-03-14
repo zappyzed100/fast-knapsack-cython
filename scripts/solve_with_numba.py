@@ -56,9 +56,13 @@ def _run_sa_numba(
     conflict_masks,
     gen,
     seed,
+    bonus_t1,
+    bonus_t2,
+    bonus_t3,
+    bonus_val,
 ):
     xs_state = np.array([uint64(seed + 1)], dtype=uint64)
-    BONUS_VAL = 50.0
+    BONUS_VAL = float64(bonus_val)
 
     g_bits = np.zeros(16, dtype=uint64)
     cur_w = np.zeros(3, dtype=int32)
@@ -94,7 +98,11 @@ def _run_sa_numba(
 
     cur_bonus = 0.0
     for j in range(n_groups):
-        if 3 <= gc_buf[j] <= 5:
+        if gc_buf[j] >= bonus_t1:
+            cur_bonus += BONUS_VAL
+        if gc_buf[j] >= bonus_t2:
+            cur_bonus += BONUS_VAL
+        if gc_buf[j] >= bonus_t3:
             cur_bonus += BONUS_VAL
 
     best_total = cur_val_sum + cur_bonus
@@ -123,10 +131,12 @@ def _run_sa_numba(
                 if not conflict and (g_add < 0 or gc_buf[g_add] < group_max):
                     bonus_diff = 0.0
                     if g_add >= 0:
-                        if gc_buf[g_add] == 2:
+                        if (
+                            gc_buf[g_add] == bonus_t1 - 1
+                            or gc_buf[g_add] == bonus_t2 - 1
+                            or gc_buf[g_add] == bonus_t3 - 1
+                        ):
                             bonus_diff = BONUS_VAL
-                        elif gc_buf[g_add] == 5:
-                            bonus_diff = -BONUS_VAL
 
                     diff = float64(values[add_idx]) + bonus_diff
                     if diff > 0 or (temp > 0 and r < np.exp(diff / (temp * 100.0))):
@@ -169,15 +179,19 @@ def _run_sa_numba(
                             bonus_diff = 0.0
                             if g_add != g_rem:
                                 if g_rem >= 0:
-                                    if gc_buf[g_rem] == 3:
+                                    if (
+                                        gc_buf[g_rem] == bonus_t1
+                                        or gc_buf[g_rem] == bonus_t2
+                                        or gc_buf[g_rem] == bonus_t3
+                                    ):
                                         bonus_diff -= BONUS_VAL
-                                    elif gc_buf[g_rem] == 6:
-                                        bonus_diff += BONUS_VAL
                                 if g_add >= 0:
-                                    if gc_buf[g_add] == 2:
+                                    if (
+                                        gc_buf[g_add] == bonus_t1 - 1
+                                        or gc_buf[g_add] == bonus_t2 - 1
+                                        or gc_buf[g_add] == bonus_t3 - 1
+                                    ):
                                         bonus_diff += BONUS_VAL
-                                    elif gc_buf[g_add] == 5:
-                                        bonus_diff -= BONUS_VAL
 
                             diff = (
                                 float64(values[add_idx] - values[rem_idx]) + bonus_diff
@@ -211,10 +225,12 @@ def _run_sa_numba(
                 g_rem = item_groups[add_idx]
                 bonus_diff = 0.0
                 if g_rem >= 0:
-                    if gc_buf[g_rem] == 3:
+                    if (
+                        gc_buf[g_rem] == bonus_t1
+                        or gc_buf[g_rem] == bonus_t2
+                        or gc_buf[g_rem] == bonus_t3
+                    ):
                         bonus_diff = -BONUS_VAL
-                    elif gc_buf[g_rem] == 6:
-                        bonus_diff = BONUS_VAL
                 sol[add_idx] = 0
                 for k in range(3):
                     cur_w[k] -= weights[add_idx, k]
@@ -301,6 +317,10 @@ def solve_knapsack_evolution_numba(
     n_items,
     n_groups,
     group_max,
+    bonus_t1,
+    bonus_t2,
+    bonus_t3,
+    bonus_val,
     pop_size=20,
     rand_add_size=20,
     crossover_size=50,
@@ -343,6 +363,10 @@ def solve_knapsack_evolution_numba(
                 conflict_masks,
                 gen,
                 base_seed ^ (i * 777 + gen),
+                bonus_t1,
+                bonus_t2,
+                bonus_t3,
+                bonus_val,
             )
             scores[i] = s
             pops[i] = sol
@@ -382,6 +406,10 @@ def solve_knapsack_evolution_numba(
                 conflict_masks,
                 gen,
                 base_seed ^ (i * 123 + gen),
+                bonus_t1,
+                bonus_t2,
+                bonus_t3,
+                bonus_val,
             )
             scores[i] = s
             pops[i] = sol
@@ -440,7 +468,9 @@ class NumbaBenchmarker:
 
     def run(self, iterations=10000000, patience=10, full_output=True):
         df = pd.read_csv(self.csv_path)
-        caps, confs = parse_constraints(self.constraints_path)
+        caps, confs, bonus_thresholds, bonus_value = parse_constraints(
+            self.constraints_path
+        )
         v, w, g = (
             df["value"].values.astype(np.int32),
             df[["weight0", "weight1", "weight2"]].values.astype(np.int32),
@@ -464,9 +494,23 @@ class NumbaBenchmarker:
             mask,
             0,
             42,
+            int(bonus_thresholds[0]),
+            int(bonus_thresholds[1]),
+            int(bonus_thresholds[2]),
+            float(bonus_value),
         )
         el1 = time.perf_counter() - st1
-        eval1 = evaluate_solution(sol_sa, v, w, caps, g, confs, 10)
+        eval1 = evaluate_solution(
+            sol_sa,
+            v,
+            w,
+            caps,
+            g,
+            confs,
+            10,
+            bonus_val=bonus_value,
+            bonus_thresholds=bonus_thresholds,
+        )
         status1 = "SATISFIED" if eval1["is_valid"] else "INFEASIBLE"
         save_result(
             "numba_single_sa",
@@ -489,6 +533,10 @@ class NumbaBenchmarker:
             n_items,
             n_groups,
             10,
+            int(bonus_thresholds[0]),
+            int(bonus_thresholds[1]),
+            int(bonus_thresholds[2]),
+            float(bonus_value),
             pop_size=20,
             rand_add_size=20,
             crossover_size=50,
@@ -497,7 +545,17 @@ class NumbaBenchmarker:
             patience=patience,
         )
         el2 = time.perf_counter() - st2
-        eval2 = evaluate_solution(sol_evo, v, w, caps, g, confs, 10)
+        eval2 = evaluate_solution(
+            sol_evo,
+            v,
+            w,
+            caps,
+            g,
+            confs,
+            10,
+            bonus_val=bonus_value,
+            bonus_thresholds=bonus_thresholds,
+        )
         status2 = "SATISFIED" if eval2["is_valid"] else "INFEASIBLE"
         save_result(
             "numba_hybrid_evolution",

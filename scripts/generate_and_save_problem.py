@@ -6,6 +6,8 @@ import pandas as pd
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = PROJECT_ROOT / "data"
+BONUS_THRESHOLDS = (3, 4, 5)
+BONUS_VALUE = 3
 
 
 def generate_and_save_problem(
@@ -52,7 +54,6 @@ def generate_and_save_problem(
     capacities = [int(df[f"weight{i}"].sum() * 0.02) for i in range(3)]
 
     # 2. グループ間禁止ペア生成（重複なし）
-    cliques = []  # MiniZinc互換のため保持（使用しない）
     used_pairs = set()
     all_conflict_pairs = []
     while len(all_conflict_pairs) < n_random_conflicts:
@@ -67,14 +68,21 @@ def generate_and_save_problem(
         f.write(f"capacities:{','.join(map(str, capacities))}\n")
         conf_str = ";".join([f"{p[0]},{p[1]}" for p in all_conflict_pairs])
         f.write(f"conflicts:{conf_str}\n")
-        f.write("bonus_thresholds:3,4,5\n")  # バリデーター用
-        f.write("bonus_value:50\n")
+        f.write(f"bonus_thresholds:{','.join(map(str, BONUS_THRESHOLDS))}\n")
+        f.write(f"bonus_value:{BONUS_VALUE}\n")
 
     print(f"Generated {n_items} items with {n_groups} groups.")
-    return df, capacities, cliques, all_conflict_pairs
+    return df, capacities, all_conflict_pairs
 
 
-def save_as_dzn(df, capacities, cliques, conflicts, filename=None):
+def save_as_dzn(
+    df,
+    capacities,
+    conflicts,
+    bonus_thresholds=BONUS_THRESHOLDS,
+    bonus_value=BONUS_VALUE,
+    filename=None,
+):
     if filename is None:
         filename = DATA_DIR / "data.dzn"
 
@@ -105,7 +113,8 @@ def save_as_dzn(df, capacities, cliques, conflicts, filename=None):
         )
 
         f.write(f"n_groups = {n_groups};\n")
-        f.write("bonus_val = 50;\n")
+        f.write(f"bonus_val = {bonus_value};\n")
+        f.write(f"bonus_thresholds = [{', '.join(map(str, bonus_thresholds))}];\n")
 
         # キャパシティ
         f.write(f"cap0 = {capacities[0]};\n")
@@ -157,7 +166,7 @@ def save_problem_description(filename=None):
       制約グラフの構造を不規則にすることでソルバーの前処理による簡略化を防いでいる。
 
   (c) 段階ボーナス（まとめ買い加点）
-      同じカテゴリーから 3個・4個・5個 選ぶごとに +50点（最大 +150点）。
+      同じカテゴリーから 3個・4個・5個目に到達するたびに +3点（最大 +9点）。
       このボーナスを数式で扱うには「何個選んだか」を追跡する補助変数が
       200グループ × 3段階 = 600個 必要になり、汎用ソルバーの探索空間が大きく膨らむ。
 
@@ -168,6 +177,6 @@ def save_problem_description(filename=None):
 
 
 if __name__ == "__main__":
-    df, capacities, cliques, conflicts = generate_and_save_problem()
-    save_as_dzn(df, capacities, cliques, conflicts)
+    df, capacities, conflicts = generate_and_save_problem()
+    save_as_dzn(df, capacities, conflicts)
     save_problem_description()

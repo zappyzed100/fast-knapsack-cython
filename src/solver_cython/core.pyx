@@ -29,13 +29,14 @@ cdef void _run_sa_on_block(
     char* sol, double* score_ptr,
     int[:] values, int[:, :] weights, int[:] capacities, int[:] item_groups,
     int n_items, int n_groups, int group_max, int iterations,
-    unsigned long long[:, :] conflict_masks, int gen, int* gc_buf, char* best_sol_buf, unsigned int seed
+    unsigned long long[:, :] conflict_masks, int gen,
+    int bonus_t1, int bonus_t2, int bonus_t3, double bonus_val,
+    int* gc_buf, char* best_sol_buf, unsigned int seed
 ) noexcept nogil:
     cdef int it, j, k, add_idx, rem_idx, g_add, g_rem, conflict
     cdef double r, temp, cur_val_sum, cur_bonus, bonus_diff, diff
     cdef unsigned long long g_bits[16]
     cdef int cur_w[3]
-    cdef double BONUS_VAL = 50.0
     cdef xorshift_state xsr
     xsr.a = seed
     
@@ -72,8 +73,12 @@ cdef void _run_sa_on_block(
 
     cur_bonus = 0.0
     for j in range(n_groups):
-        if 3 <= gc_buf[j] <= 5:
-            cur_bonus += BONUS_VAL
+        if gc_buf[j] >= bonus_t1:
+            cur_bonus += bonus_val
+        if gc_buf[j] >= bonus_t2:
+            cur_bonus += bonus_val
+        if gc_buf[j] >= bonus_t3:
+            cur_bonus += bonus_val
 
     cdef double best_total = cur_val_sum + cur_bonus
     memcpy(best_sol_buf, sol, n_items * sizeof(char))
@@ -100,8 +105,8 @@ cdef void _run_sa_on_block(
                 if not conflict and (g_add < 0 or gc_buf[g_add] < group_max):
                     bonus_diff = 0.0
                     if g_add >= 0:
-                        if gc_buf[g_add] == 2: bonus_diff = BONUS_VAL
-                        elif gc_buf[g_add] == 5: bonus_diff = -BONUS_VAL
+                        if gc_buf[g_add] == bonus_t1 - 1 or gc_buf[g_add] == bonus_t2 - 1 or gc_buf[g_add] == bonus_t3 - 1:
+                            bonus_diff = bonus_val
                     
                     diff = <double>values[add_idx] + bonus_diff
                     if diff > 0 or (temp > 0 and r < exp(diff / (temp * 100.0))):
@@ -137,11 +142,11 @@ cdef void _run_sa_on_block(
                             bonus_diff = 0.0
                             if g_add != g_rem:
                                 if g_rem >= 0:
-                                    if gc_buf[g_rem] == 3: bonus_diff -= BONUS_VAL
-                                    elif gc_buf[g_rem] == 6: bonus_diff += BONUS_VAL
+                                    if gc_buf[g_rem] == bonus_t1 or gc_buf[g_rem] == bonus_t2 or gc_buf[g_rem] == bonus_t3:
+                                        bonus_diff -= bonus_val
                                 if g_add >= 0:
-                                    if gc_buf[g_add] == 2: bonus_diff += BONUS_VAL
-                                    elif gc_buf[g_add] == 5: bonus_diff -= BONUS_VAL
+                                    if gc_buf[g_add] == bonus_t1 - 1 or gc_buf[g_add] == bonus_t2 - 1 or gc_buf[g_add] == bonus_t3 - 1:
+                                        bonus_diff += bonus_val
                             
                             diff = <double>(values[add_idx] - values[rem_idx]) + bonus_diff
                             if diff > 0 or (temp > 0 and r < exp(diff / (temp * 100.0))):
@@ -164,8 +169,8 @@ cdef void _run_sa_on_block(
                 g_rem = item_groups[add_idx]
                 bonus_diff = 0.0
                 if g_rem >= 0:
-                    if gc_buf[g_rem] == 3: bonus_diff = -BONUS_VAL
-                    elif gc_buf[g_rem] == 6: bonus_diff = BONUS_VAL
+                    if gc_buf[g_rem] == bonus_t1 or gc_buf[g_rem] == bonus_t2 or gc_buf[g_rem] == bonus_t3:
+                        bonus_diff = -bonus_val
                 sol[add_idx] = 0
                 for k in range(3): cur_w[k] -= weights[add_idx, k]
                 if g_rem >= 0:
@@ -227,6 +232,10 @@ cdef void _greedy_crossover(
 def solve_knapsack_sa_parallel(
     int[:] values, int[:, :] weights, int[:] capacities, int[:] item_groups,
     int[:, :] conflict_pairs, int n_items, int n_groups, int group_max,
+    int bonus_t1,
+    int bonus_t2,
+    int bonus_t3,
+    double bonus_val,
     int pop_size = 20,
     int rand_add_size = 20,
     int crossover_size = 50,
@@ -267,7 +276,7 @@ def solve_knapsack_sa_parallel(
         # 1. 新規個体
         for i in prange(pop_size, pop_size + rand_add_size, nogil=True):
             memset(&pops[i, 0], 0, n_items * sizeof(char))
-            _run_sa_on_block(&pops[i, 0], &scores[i], values, weights, capacities, item_groups, n_items, n_groups, group_max, iter_per_ind, conflict_masks, gen, gc_buffers[i], best_sol_buffers[i], base_seed ^ <unsigned int>(i * 777 + gen))
+            _run_sa_on_block(&pops[i, 0], &scores[i], values, weights, capacities, item_groups, n_items, n_groups, group_max, iter_per_ind, conflict_masks, gen, bonus_t1, bonus_t2, bonus_t3, bonus_val, gc_buffers[i], best_sol_buffers[i], base_seed ^ <unsigned int>(i * 777 + gen))
 
         # 2. 交叉 (事前にインデックスを計算してprangeで並列実行)
         cx1 = np.random.randint(0, pop_size + rand_add_size, crossover_size).astype(np.int32)
@@ -277,7 +286,7 @@ def solve_knapsack_sa_parallel(
 
         # 3. ブラッシュアップ SA
         for i in prange(total_pop, nogil=True):
-            _run_sa_on_block(&pops[i, 0], &scores[i], values, weights, capacities, item_groups, n_items, n_groups, group_max, iter_per_ind, conflict_masks, gen, gc_buffers[i], best_sol_buffers[i], base_seed ^ <unsigned int>(i * 123 + gen))
+            _run_sa_on_block(&pops[i, 0], &scores[i], values, weights, capacities, item_groups, n_items, n_groups, group_max, iter_per_ind, conflict_masks, gen, bonus_t1, bonus_t2, bonus_t3, bonus_val, gc_buffers[i], best_sol_buffers[i], base_seed ^ <unsigned int>(i * 123 + gen))
 
         sorted_indices = np.argsort(-np.asarray(scores))
         best_idx = sorted_indices[0]
@@ -320,6 +329,10 @@ def solve_knapsack_sa(
     int n_items, 
     int n_groups, 
     int group_max, 
+    int bonus_t1,
+    int bonus_t2,
+    int bonus_t3,
+    double bonus_val,
     long long max_iter,
     int[:] rand_add,
     int[:] rand_rem,
@@ -333,7 +346,6 @@ def solve_knapsack_sa(
     cdef int i, j, k, it, g_add, g_rem, add_idx, rem_idx, u, v
     cdef int over_weight, w_ok, conflict
     cdef double r_val, temp, diff, val_diff, current_bonus, bonus_diff
-    cdef double BONUS_VAL = 50.0
 
     # マスク作成
     for i in range(conflict_pairs.shape[0]):
@@ -398,11 +410,11 @@ def solve_knapsack_sa(
                             # ボーナス差分計算
                             bonus_diff = 0.0
                             # 削除の影響
-                            if group_counts[g_rem] == 3: bonus_diff -= BONUS_VAL
-                            elif group_counts[g_rem] == 6: bonus_diff += BONUS_VAL
+                            if group_counts[g_rem] == bonus_t1 or group_counts[g_rem] == bonus_t2 or group_counts[g_rem] == bonus_t3:
+                                bonus_diff -= bonus_val
                             # 追加の影響
-                            if group_counts[g_add] == 2: bonus_diff += BONUS_VAL
-                            elif group_counts[g_add] == 5: bonus_diff -= BONUS_VAL
+                            if group_counts[g_add] == bonus_t1 - 1 or group_counts[g_add] == bonus_t2 - 1 or group_counts[g_add] == bonus_t3 - 1:
+                                bonus_diff += bonus_val
                             
                             val_diff = <double>(values[add_idx] - values[rem_idx])
                             diff = val_diff + bonus_diff
@@ -440,8 +452,8 @@ def solve_knapsack_sa(
                             break
                 if not conflict:
                     bonus_diff = 0.0
-                    if group_counts[g_add] == 2: bonus_diff += BONUS_VAL
-                    elif group_counts[g_add] == 5: bonus_diff -= BONUS_VAL
+                    if group_counts[g_add] == bonus_t1 - 1 or group_counts[g_add] == bonus_t2 - 1 or group_counts[g_add] == bonus_t3 - 1:
+                        bonus_diff += bonus_val
                     
                     val_diff = <double>values[add_idx]
                     diff = val_diff + bonus_diff
@@ -463,8 +475,8 @@ def solve_knapsack_sa(
             if r_val < 0.02 * temp:
                 g_rem = item_groups[add_idx]
                 bonus_diff = 0.0
-                if group_counts[g_rem] == 3: bonus_diff -= BONUS_VAL
-                elif group_counts[g_rem] == 6: bonus_diff += BONUS_VAL
+                if group_counts[g_rem] == bonus_t1 or group_counts[g_rem] == bonus_t2 or group_counts[g_rem] == bonus_t3:
+                    bonus_diff -= bonus_val
                 
                 current_sol[add_idx] = 0
                 for j in range(3): cur_w[j] -= weights[add_idx, j]

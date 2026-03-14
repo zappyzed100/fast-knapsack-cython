@@ -48,7 +48,7 @@ def run_single_benchmark(solver_id, timeout_sec=100, full_output=True):
         status = str(result.status)
 
         df = pd.read_csv(os.path.join(PROJECT_ROOT, "data", "problem_data.csv"))
-        capacities, conflicts = parse_constraints(
+        capacities, conflicts, bonus_thresholds, bonus_value = parse_constraints(
             os.path.join(PROJECT_ROOT, "data", "constraints.txt")
         )
         values = df["value"].values.astype(np.int32)
@@ -65,6 +65,8 @@ def run_single_benchmark(solver_id, timeout_sec=100, full_output=True):
                 groups,
                 conflicts,
                 group_max=10,
+                bonus_val=bonus_value,
+                bonus_thresholds=bonus_thresholds,
             )
         else:
             evaluation = {

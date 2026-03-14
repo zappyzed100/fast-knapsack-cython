@@ -5,7 +5,9 @@ from typing import Any
 import numpy as np
 
 
-def parse_constraints(constraints_path: str) -> tuple[np.ndarray, np.ndarray]:
+def parse_constraints(
+    constraints_path: str,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
     with open(constraints_path, "r", encoding="utf-8") as f:
         lines = {
             line.split(":")[0]: line.split(":", 1)[1].strip()
@@ -25,7 +27,12 @@ def parse_constraints(constraints_path: str) -> tuple[np.ndarray, np.ndarray]:
         if conf_raw
         else np.zeros((0, 2), dtype=np.int32)
     )
-    return capacities, conflict_pairs
+    thresholds_raw = lines["bonus_thresholds"]
+    bonus_thresholds = np.array(
+        list(map(int, thresholds_raw.split(","))), dtype=np.int32
+    )
+    bonus_value = int(lines["bonus_value"])
+    return capacities, conflict_pairs, bonus_thresholds, bonus_value
 
 
 def evaluate_solution(
@@ -36,7 +43,8 @@ def evaluate_solution(
     item_groups: np.ndarray,
     conflict_pairs: np.ndarray,
     group_max: int,
-    bonus_val: int = 50,
+    bonus_val: int,
+    bonus_thresholds: np.ndarray,
 ) -> dict[str, Any]:
     sol = np.asarray(solution, dtype=np.int8).reshape(-1)
     selected_indices = np.where(sol == 1)[0]
@@ -93,8 +101,9 @@ def evaluate_solution(
             errors.append(f"Conflict violations: {len(conflict_violations)} pairs")
 
         base_score = int(np.sum(values[selected_indices]))
-        bonus_count = int(np.sum((counts >= 3) & (counts <= 5)))
-        bonus_score = int(bonus_count * bonus_val)
+        thresholds = np.asarray(bonus_thresholds, dtype=np.int32)
+        bonus_steps = np.sum(counts[:, None] >= thresholds[None, :], axis=1)
+        bonus_score = int(np.sum(bonus_steps) * bonus_val)
 
     total_score = int(base_score + bonus_score)
     is_valid = len(errors) == 0

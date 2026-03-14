@@ -14,6 +14,7 @@ int: cap0;
 int: cap1;
 int: cap2;
 int: bonus_val;
+array[1..3] of int: bonus_thresholds;
 
 % 排他ペア (グループID 0..n_groups-1 のペア)
 set of int: CONFLICTS = 1..n_conflicts;
@@ -22,7 +23,9 @@ array[CONFLICTS, 1..2] of int: conflict_pairs;
 % --- 決定変数 ---
 array[ITEMS] of var 0..1: x;
 set of int: GROUPS = 0..n_groups-1;
-array[GROUPS] of var 0..1: has_bonus;
+array[GROUPS] of var 0..1: bonus_ge3;
+array[GROUPS] of var 0..1: bonus_ge4;
+array[GROUPS] of var 0..1: bonus_ge5;
 array[GROUPS] of var 0..1: group_active;
 
 % --- 制約条件 ---
@@ -45,16 +48,25 @@ constraint forall(c in CONFLICTS)(
     group_active[conflict_pairs[c, 1]] + group_active[conflict_pairs[c, 2]] <= 1
 );
 
-% 4. ボーナス判定 (3 <= 個数 <= 5 のときのみ has_bonus=1)
+% 4. 段階ボーナス判定
+% 3個以上で +50, 4個以上でさらに +50, 5個以上でさらに +50 (合計最大 +150)
 constraint forall(g in GROUPS)(
     let { var int: c = sum(i in ITEMS where group_id[i] == g)(x[i]) } in (
-        c >= 3 * has_bonus[g] /\ 
-        c <= 5 + (n_items * (1 - has_bonus[g]))
+        c >= bonus_thresholds[1] * bonus_ge3[g] /\
+        c <= (bonus_thresholds[1] - 1) + n_items * bonus_ge3[g] /\
+        c >= bonus_thresholds[2] * bonus_ge4[g] /\
+        c <= (bonus_thresholds[2] - 1) + n_items * bonus_ge4[g] /\
+        c >= bonus_thresholds[3] * bonus_ge5[g] /\
+        c <= (bonus_thresholds[3] - 1) + n_items * bonus_ge5[g] /\
+        bonus_ge5[g] <= bonus_ge4[g] /\
+        bonus_ge4[g] <= bonus_ge3[g]
     )
 );
 
 % --- 目的関数 ---
-var int: total_value = sum(i in ITEMS)(value[i] * x[i]) + sum(g in GROUPS)(bonus_val * has_bonus[g]);
+var int: total_value =
+    sum(i in ITEMS)(value[i] * x[i])
+    + sum(g in GROUPS)(bonus_val * (bonus_ge3[g] + bonus_ge4[g] + bonus_ge5[g]));
 
 solve maximize total_value;
 
