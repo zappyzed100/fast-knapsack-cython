@@ -74,6 +74,7 @@ def main():
     plt.rcParams["font.family"] = "MS Gothic"
 
     result_dir = os.path.join(PROJECT_ROOT, "results")
+    runs_dir = os.path.join(result_dir, "runs")
     target_files = [
         "cbc_results.txt",
         "cp_sat_results.txt",
@@ -85,10 +86,10 @@ def main():
     all_data = []
     seen_solvers = {}
 
-    print(f"'{result_dir}' 内の結果ファイルを走査中...")
+    print(f"'{runs_dir}' 内の結果ファイルを走査中...")
 
     for filename in target_files:
-        path = os.path.join(result_dir, filename)
+        path = os.path.join(runs_dir, filename)
         file_results = parse_result_file(path)
 
         # 各ファイル内の各ソルバーについて、最新（リストの最後）のデータのみを採用

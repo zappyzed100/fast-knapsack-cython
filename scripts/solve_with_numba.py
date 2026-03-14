@@ -381,7 +381,7 @@ def validate_solution(
 
 
 def save_result(solver_name, score, elapsed, is_valid):
-    result_dir = "results"
+    result_dir = os.path.join(PROJECT_ROOT, "results", "runs")
     os.makedirs(result_dir, exist_ok=True)
     output_path = os.path.join(result_dir, "numba_results.txt")
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
