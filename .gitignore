@@ -11,7 +11,8 @@ solver_cython/*.html
 build/
 
 # データファイル（巨大なCSVなどは通常含めない）
-problem_data.csv
-problem_description.txt
-constraints.txt
+data/problem_data.csv
+data/problem_description.txt
+data/constraints.txt
+data/data.dzn
 knapsack_tuning.db

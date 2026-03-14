@@ -6,8 +6,13 @@ import pandas as pd
 from minizinc import Instance, Model, Solver
 
 
+PROJECT_ROOT = os.path.abspath(os.path.dirname(__file__))
+
+
 def validate_solution_from_minizinc(
-    result, csv_path="problem_data.csv", constraints_path="constraints.txt"
+    result,
+    csv_path=os.path.join(PROJECT_ROOT, "data", "problem_data.csv"),
+    constraints_path=os.path.join(PROJECT_ROOT, "data", "constraints.txt"),
 ):
     """
     MiniZincの実行結果が制約を満たしているか独立して検証する
@@ -82,9 +87,9 @@ def validate_solution_from_minizinc(
 
 
 def run_single_benchmark(solver_id, timeout_sec=100):
-    model_path = os.path.join("solver_minizinc", "problem.mzn")
-    data_path = os.path.join("solver_minizinc", "data.dzn")
-    result_dir = "result"
+    model_path = os.path.join(PROJECT_ROOT, "solver_minizinc", "problem.mzn")
+    data_path = os.path.join(PROJECT_ROOT, "data", "data.dzn")
+    result_dir = os.path.join(PROJECT_ROOT, "result")
 
     clean_solver_id = solver_id.replace("-", "_").replace(".", "_")
     output_path = os.path.join(result_dir, f"{clean_solver_id}_results.txt")

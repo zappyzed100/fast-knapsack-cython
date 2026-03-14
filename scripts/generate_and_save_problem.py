@@ -1,6 +1,11 @@
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
-import os
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+DATA_DIR = PROJECT_ROOT / "data"
 
 
 def generate_and_save_problem(
@@ -9,9 +14,20 @@ def generate_and_save_problem(
     clique_size=50,
     n_random_conflicts=80,
     n_groups=200,
-    filename="problem_data.csv",
+    filename=None,
+    constraints_filename=None,
 ):
     np.random.seed(42)
+
+    if filename is None:
+        filename = DATA_DIR / "problem_data.csv"
+    if constraints_filename is None:
+        constraints_filename = DATA_DIR / "constraints.txt"
+
+    filename = Path(filename)
+    constraints_filename = Path(constraints_filename)
+    filename.parent.mkdir(parents=True, exist_ok=True)
+    constraints_filename.parent.mkdir(parents=True, exist_ok=True)
 
     # 1. アイテム生成
     w0 = np.random.randint(50, 150, n_items)
@@ -51,8 +67,8 @@ def generate_and_save_problem(
         p1, p2 = np.random.choice(np.arange(n_items), 2, replace=False)
         all_conflict_pairs.append((int(p1), int(p2)))
 
-    # 4. 制約内容を constraints.txt へ保存
-    with open("constraints.txt", "w") as f:
+    # 4. 制約内容を data/constraints.txt へ保存
+    with open(constraints_filename, "w", encoding="utf-8") as f:
         f.write(f"capacities:{','.join(map(str, capacities))}\n")
         f.write(f"cliques:{';'.join(cliques)}\n")
         conf_str = ";".join([f"{p[0]},{p[1]}" for p in all_conflict_pairs])
@@ -64,14 +80,17 @@ def generate_and_save_problem(
     return df, capacities, cliques, all_conflict_pairs
 
 
-def save_as_dzn(
-    df, capacities, cliques, conflicts, filename="solver_minizinc/data.dzn"
-):
-    os.makedirs(os.path.dirname(filename), exist_ok=True)
+def save_as_dzn(df, capacities, cliques, conflicts, filename=None):
+    if filename is None:
+        filename = DATA_DIR / "data.dzn"
+
+    filename = Path(filename)
+    filename.parent.mkdir(parents=True, exist_ok=True)
+
     n_items = len(df)
     n_groups = df["group_id"].max() + 1
 
-    with open(filename, "w") as f:
+    with open(filename, "w", encoding="utf-8") as f:
         f.write(f"n_items = {n_items};\n")
 
         # array1d(0..n_items-1, [...]) 形式に修正してインデックスを強制指定
@@ -92,7 +111,7 @@ def save_as_dzn(
         )
 
         f.write(f"n_groups = {n_groups};\n")
-        f.write(f"bonus_val = 50;\n")
+        f.write("bonus_val = 50;\n")
 
         # キャパシティ
         f.write(f"cap0 = {capacities[0]};\n")
@@ -105,8 +124,6 @@ def save_as_dzn(
         f.write(f"clique_members = [{clique_str}];\n")
 
         f.write(f"n_conflicts = {len(conflicts)};\n")
-        # 2次元配列も明示的にインデックスを指定
-        pair_rows = " | ".join([f"{p[0]}, {p[1]}" for p in conflicts])
         f.write(
             f"conflict_pairs = array2d(1..{len(conflicts)}, 1..2, [{', '.join([f'{p[0]}, {p[1]}' for p in conflicts])}]);\n"
         )
@@ -114,7 +131,13 @@ def save_as_dzn(
     print(f"MiniZinc data saved to {filename}")
 
 
-def save_problem_description(filename="problem_description.txt"):
+def save_problem_description(filename=None):
+    if filename is None:
+        filename = DATA_DIR / "problem_description.txt"
+
+    filename = Path(filename)
+    filename.parent.mkdir(parents=True, exist_ok=True)
+
     description = """
 ==================================================
 【ベンチマーク専用】

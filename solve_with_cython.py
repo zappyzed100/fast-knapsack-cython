@@ -60,8 +60,8 @@ def validate_solution(
 
 class CythonBenchmarker:
     def __init__(self):
-        self.csv_path = "problem_data.csv"
-        self.constraints_path = "constraints.txt"
+        self.csv_path = os.path.join(PROJECT_ROOT, "data", "problem_data.csv")
+        self.constraints_path = os.path.join(PROJECT_ROOT, "data", "constraints.txt")
         self.group_max = 10
 
     def load_all_data(self):

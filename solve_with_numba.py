@@ -8,6 +8,9 @@ import datetime
 from numba import njit, uint64, int32, int8, float64, prange
 
 
+PROJECT_ROOT = os.path.abspath(os.path.dirname(__file__))
+
+
 # ---------------------------------------------------------
 # 1. 高速乱数 (Xorshift)
 # ---------------------------------------------------------
@@ -395,8 +398,8 @@ def save_result(solver_name, score, elapsed, is_valid):
 
 class NumbaBenchmarker:
     def __init__(self):
-        self.csv_path = "problem_data.csv"
-        self.constraints_path = "constraints.txt"
+        self.csv_path = os.path.join(PROJECT_ROOT, "data", "problem_data.csv")
+        self.constraints_path = os.path.join(PROJECT_ROOT, "data", "constraints.txt")
 
     def run(self, iterations=10000000):
         df = pd.read_csv(self.csv_path)
