@@ -12,7 +12,7 @@ DEFAULT_REPEATS = 20
 
 
 def build_solver_jobs(no_full_output=True, stochastic_repeats=DEFAULT_REPEATS):
-    """stochastic_repeats: Cython/Numbaの反復回数。MiniZinc等の決定論的ソルバーは常に1回。"""
+    """stochastic_repeats: 各ソルバーを時間予算ごとに実行する反復回数。"""
     common_args = ["--no-full-output"] if no_full_output else []
     return [
         {
@@ -28,13 +28,13 @@ def build_solver_jobs(no_full_output=True, stochastic_repeats=DEFAULT_REPEATS):
             "repeats": stochastic_repeats,
         },
         {
-            # CBC / CP-SAT / Gecode は決定論的 → 1回のみ
+            # CP-SAT など時間制限下でばらつくケースもあるため、MiniZinc系も repeats 回実行
             "name": "minizinc",
             "script": os.path.join(
                 PROJECT_ROOT, "scripts", "solve_with_minizinc_solvers.py"
             ),
             "args": common_args,
-            "repeats": 1,
+            "repeats": stochastic_repeats,
         },
     ]
 
