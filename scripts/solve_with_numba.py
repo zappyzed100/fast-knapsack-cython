@@ -951,7 +951,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--timeout",
-        type=int,
+        type=float,
         default=None,
         help="実行時間の目安（秒）。指定するとSAと進化計算の両方をその秒数だけ実行する",
     )

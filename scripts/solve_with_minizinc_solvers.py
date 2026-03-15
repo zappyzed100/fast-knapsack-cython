@@ -113,7 +113,7 @@ def run_single_benchmark(solver_id, timeout_sec=100, full_output=True):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--timeout", type=int, default=100)
+    parser.add_argument("--timeout", type=float, default=100.0)
     parser.add_argument(
         "--solvers",
         type=str,
