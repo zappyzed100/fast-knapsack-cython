@@ -5,7 +5,9 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-TIME_BUDGETS = [10, 30, 60, 100]
+TIME_BUDGETS = [1, 10, 30, 60, 100]
+SA_ONLY_BUDGETS = [0.03]
+SA_ONLY_SOLVERS = {"cython_single_sa", "numba_single_sa"}
 
 DISPLAY_NAMES = {
     "cbc": "Cbc (MILP/数理最適化)",
@@ -90,12 +92,18 @@ def parse_result_file(file_path):
     return results
 
 
-def select_latest_by_budget(records, budget_sec):
-    """指定秒数以下で、各ソルバーの最新結果のみを返す。"""
+def select_latest_by_budget(records, budget_sec, solver_filter=None):
+    """budget_sec より大きく budget_sec+バッファ より小さい実行時間のレコードから、各ソルバーの最新結果のみを返す。
+    solver_filter: 対象とする _raw_name の集合。None の場合は全ソルバーが対象。
+    """
+    upper = budget_sec + min(2.0, budget_sec * 5)
     latest = {}
 
     for rec in records:
-        if rec["実行時間 (秒)"] > budget_sec:
+        if solver_filter is not None and rec["_raw_name"] not in solver_filter:
+            continue
+        t = rec["実行時間 (秒)"]
+        if not (t > budget_sec and t < upper):
             continue
 
         key = rec["_raw_name"]
@@ -199,6 +207,27 @@ def main():
         f.write(
             "実行時間が各予算以下のレコードから、ソルバーごとの最新データを採用しています。\n\n"
         )
+
+        for budget in SA_ONLY_BUDGETS:
+            df_budget = select_latest_by_budget(
+                all_records, budget, solver_filter=SA_ONLY_SOLVERS
+            )
+            f.write(f"### 実行時間上限 {budget} 秒 (CythonおよびNumba SAのみ)\n\n")
+            if df_budget.empty:
+                f.write("該当データなし\n\n")
+            else:
+                f.write(df_budget.to_markdown(index=False))
+                f.write("\n\n")
+
+                png_path = os.path.join(
+                    reports_dir, f"benchmark_comparison_{budget}s_sa_jp.png"
+                )
+                save_table_png(
+                    df_budget,
+                    f"ナップサック問題 SA比較表（上限 {budget} 秒）",
+                    png_path,
+                )
+                print(f"比較画像を生成しました: {png_path}")
 
         for budget in TIME_BUDGETS:
             df_budget = select_latest_by_budget(all_records, budget)
