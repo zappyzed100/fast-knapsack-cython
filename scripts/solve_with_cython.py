@@ -17,6 +17,7 @@ if os.path.join(PROJECT_ROOT, "src") not in sys.path:
 from solver_cython.core import (
     solve_knapsack_sa_parallel,
     solve_knapsack_sa,
+    solve_knapsack_sa_timed,
 )
 from utils.solution_eval import (
     evaluate_solution,
@@ -77,37 +78,58 @@ class CythonBenchmarker:
             f.write(result_text)
         print(result_text)
 
-    def run(self, iterations=10000000, patience=10, full_output=True):
+    def run(self, iterations=10000000, patience=10, full_output=True, timeout_sec=None):
         self.load_all_data()
 
         # ---------------------------------------------------------
-        # 1. 修正版 SAソルバー (単体実行)
+        # 1. SAソルバー (単体実行)
         # ---------------------------------------------------------
-        print(f"--- 1. Starting Cython Single SA (iters={iterations}) ---")
-        # core.pyx の solve_knapsack_sa は乱数配列を引数に取る [cite: 48]
-        rand_add = np.random.randint(0, self.n_items, size=iterations).astype(np.int32)
-        rand_rem = np.random.randint(0, self.n_items, size=iterations).astype(np.int32)
-        rand_flt = np.random.random(size=iterations).astype(np.float64)
-
-        st1 = time.perf_counter()
-        score1, sol1 = solve_knapsack_sa(
-            self.val_arr,
-            self.weight_arr,
-            self.capacities,
-            self.group_arr,
-            self.conflicts,
-            self.n_items,
-            self.n_groups,
-            self.group_max,
-            int(self.bonus_thresholds[0]),
-            int(self.bonus_thresholds[1]),
-            int(self.bonus_thresholds[2]),
-            float(self.bonus_value),
-            iterations,
-            rand_add,
-            rand_rem,
-            rand_flt,
-        )
+        if timeout_sec is not None:
+            print(f"--- 1. Starting Cython Single SA (timeout={timeout_sec}s) ---")
+            st1 = time.perf_counter()
+            score1, sol1 = solve_knapsack_sa_timed(
+                self.val_arr,
+                self.weight_arr,
+                self.capacities,
+                self.group_arr,
+                self.conflicts,
+                self.n_items,
+                self.n_groups,
+                self.group_max,
+                int(self.bonus_thresholds[0]),
+                int(self.bonus_thresholds[1]),
+                int(self.bonus_thresholds[2]),
+                float(self.bonus_value),
+                float(timeout_sec),
+            )
+        else:
+            print(f"--- 1. Starting Cython Single SA (iters={iterations}) ---")
+            rand_add = np.random.randint(0, self.n_items, size=iterations).astype(
+                np.int32
+            )
+            rand_rem = np.random.randint(0, self.n_items, size=iterations).astype(
+                np.int32
+            )
+            rand_flt = np.random.random(size=iterations).astype(np.float64)
+            st1 = time.perf_counter()
+            score1, sol1 = solve_knapsack_sa(
+                self.val_arr,
+                self.weight_arr,
+                self.capacities,
+                self.group_arr,
+                self.conflicts,
+                self.n_items,
+                self.n_groups,
+                self.group_max,
+                int(self.bonus_thresholds[0]),
+                int(self.bonus_thresholds[1]),
+                int(self.bonus_thresholds[2]),
+                float(self.bonus_value),
+                iterations,
+                rand_add,
+                rand_rem,
+                rand_flt,
+            )
         el1 = time.perf_counter() - st1
         eval1 = evaluate_solution(
             sol1,
@@ -133,10 +155,14 @@ class CythonBenchmarker:
         # ---------------------------------------------------------
         # 2. 並列進化計算 (Hybrid GA-SA)
         # ---------------------------------------------------------
-        print(f"--- 2. Starting Hybrid GA-SA (Parallel, Patience={patience}) ---")
+        if timeout_sec is not None:
+            print(
+                f"--- 2. Starting Hybrid GA-SA (Parallel, timeout={timeout_sec}s) ---"
+            )
+        else:
+            print(f"--- 2. Starting Hybrid GA-SA (Parallel, Patience={patience}) ---")
         st2 = time.perf_counter()
 
-        # core.pyx の solve_knapsack_sa_parallel を利用 [cite: 41]
         score2, sol2 = solve_knapsack_sa_parallel(
             self.val_arr,
             self.weight_arr,
@@ -153,9 +179,10 @@ class CythonBenchmarker:
             pop_size=20,
             rand_add_size=20,
             crossover_size=50,
-            max_generations=1000,
-            iter_per_ind=1000000,  # 各個体のSAイテレーション
-            patience=patience,
+            max_generations=9999 if timeout_sec is not None else 1000,
+            iter_per_ind=1000000,
+            patience=999 if timeout_sec is not None else patience,
+            timeout_sec=float(timeout_sec) if timeout_sec is not None else 0.0,
         )
         el2 = time.perf_counter() - st2
         eval2 = evaluate_solution(
@@ -182,7 +209,18 @@ class CythonBenchmarker:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--iter", type=int, default=10000000)
+    parser.add_argument(
+        "--iter",
+        type=int,
+        default=None,
+        help="SAのイテレーション数（--timeout と同時指定時は --timeout が優先）",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=None,
+        help="実行時間の目安（秒）。指定するとイテレーション数を自動推定する",
+    )
     parser.add_argument("--patience", type=int, default=10)
     parser.add_argument(
         "--full-output",
@@ -192,9 +230,13 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
+    # --timeout 未指定 かつ --iter 未指定の場合はデフォルト 10000000
+    iterations = args.iter if args.iter is not None else 10000000
+
     bench = CythonBenchmarker()
     bench.run(
-        iterations=args.iter,
+        iterations=iterations,
         patience=args.patience,
         full_output=args.full_output,
+        timeout_sec=args.timeout,
     )

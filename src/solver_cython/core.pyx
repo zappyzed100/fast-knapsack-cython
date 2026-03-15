@@ -241,14 +241,17 @@ def solve_knapsack_sa_parallel(
     int crossover_size = 50,
     int max_generations = 1000,
     int iter_per_ind = 1000000,
-    int patience = 10
+    int patience = 10,
+    double timeout_sec = 0.0
 ):
+    import time as _time
     cdef int total_pop = pop_size + rand_add_size + crossover_size
     cdef int gen, i, s_idx, best_idx
     cdef int[:] cx1, cx2
     cdef double last_best = -1.0
     cdef int no_improvement = 0
     cdef unsigned int base_seed = <unsigned int>c_time(NULL)
+    deadline = _time.perf_counter() + timeout_sec if timeout_sec > 0.0 else None
 
     cdef char[:, :] pops = np.zeros((total_pop, n_items), dtype=np.int8)
     cdef double[:] scores = np.zeros(total_pop, dtype=np.float64)
@@ -307,6 +310,10 @@ def solve_knapsack_sa_parallel(
             memcpy(&pops[i, 0], &temp_pops[i, 0], n_items * sizeof(char))
             scores[i] = temp_scores[i]
         
+        if deadline is not None and _time.perf_counter() >= deadline:
+            print(f"Gen {gen:03d}: Time limit reached.")
+            break
+
         if no_improvement >= patience:
             break
 
@@ -489,3 +496,59 @@ def solve_knapsack_sa(
                     g_bits[g_rem // 64] &= ~(1ULL << (g_rem % 64))
 
     return best_score, np.array(best_sol)
+
+# ---------------------------------------------------------
+# 6. 時間指定SAソルバー (マルチスタート・外部乱数配列不要)
+# ---------------------------------------------------------
+def solve_knapsack_sa_timed(
+    int[:] values, int[:, :] weights, int[:] capacities, int[:] item_groups,
+    int[:, :] conflict_pairs, int n_items, int n_groups, int group_max,
+    int bonus_t1, int bonus_t2, int bonus_t3, double bonus_val,
+    double timeout_sec, int chunk_iter=5000000
+):
+    """timeout_sec 秒間、SAをチャンク単位で繰り返して最良解を返す。"""
+    import time as _time
+    cdef int i, u, v
+    cdef double chunk_score = -1.0
+    cdef double best_score_global = -1.0
+    cdef int run_idx = 0
+
+    cdef unsigned long long[:, :] conflict_masks = np.zeros((1024, 16), dtype=np.uint64)
+    for i in range(conflict_pairs.shape[0]):
+        u = conflict_pairs[i, 0]
+        v = conflict_pairs[i, 1]
+        if u < 1024 and v < 1024:
+            conflict_masks[u, v // 64] |= (1ULL << (v % 64))
+            conflict_masks[v, u // 64] |= (1ULL << (u % 64))
+
+    cdef char[:] sol = np.zeros(n_items, dtype=np.int8)
+    cdef char[:] best_sol_global = np.zeros(n_items, dtype=np.int8)
+    cdef int* gc_buf = <int*>malloc(n_groups * sizeof(int))
+    cdef char* best_sol_buf = <char*>malloc(n_items * sizeof(char))
+
+    cdef unsigned int seed_base = <unsigned int>c_time(NULL)
+    deadline = _time.perf_counter() + timeout_sec
+
+    try:
+        while _time.perf_counter() < deadline:
+            memset(&sol[0], 0, n_items * sizeof(char))
+            chunk_score = -1.0
+            _run_sa_on_block(
+                &sol[0], &chunk_score,
+                values, weights, capacities, item_groups,
+                n_items, n_groups, group_max, chunk_iter,
+                conflict_masks, run_idx,
+                bonus_t1, bonus_t2, bonus_t3, bonus_val,
+                gc_buf, best_sol_buf,
+                seed_base ^ <unsigned int>(run_idx * 1000003)
+            )
+            if chunk_score > best_score_global:
+                best_score_global = chunk_score
+                memcpy(&best_sol_global[0], &sol[0], n_items * sizeof(char))
+                print(f"  Run {run_idx}: New best = {best_score_global:.1f}")
+            run_idx += 1
+    finally:
+        free(gc_buf)
+        free(best_sol_buf)
+
+    return best_score_global, np.array(best_sol_global)
