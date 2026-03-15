@@ -180,7 +180,7 @@ class CythonBenchmarker:
             pop_size=20,
             rand_add_size=20,
             crossover_size=50,
-            max_generations=9999 if timeout_sec is not None else 1000,
+            max_generations=2_000_000_000 if timeout_sec is not None else 1000,
             iter_per_ind=1000000,
             patience=999 if timeout_sec is not None else patience,
             timeout_sec=float(timeout_sec) if timeout_sec is not None else 0.0,

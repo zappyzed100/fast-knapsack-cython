@@ -328,7 +328,7 @@ def solve_knapsack_sa_parallel(
                 print(f"Gen {gen:03d}: Time limit reached.")
             break
 
-        if no_improvement >= patience:
+        if deadline is None and no_improvement >= patience:
             break
 
     for i in range(total_pop):
