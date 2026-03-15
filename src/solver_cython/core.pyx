@@ -242,21 +242,30 @@ def solve_knapsack_sa_parallel(
     int max_generations = 1000,
     int iter_per_ind = 1000000,
     int patience = 10,
-    double timeout_sec = 0.0
+    double timeout_sec = 0.0,
+    bint verbose = True
 ):
     import time as _time
     cdef int total_pop = pop_size + rand_add_size + crossover_size
     cdef int gen, i, s_idx, best_idx
-    cdef int[:] cx1, cx2
+    cdef int pool_size = pop_size + rand_add_size
+    cdef int[:] cx1
+    cdef int[:] cx2
     cdef double last_best = -1.0
     cdef int no_improvement = 0
     cdef unsigned int base_seed = <unsigned int>c_time(NULL)
+    cdef xorshift_state sel_rng
     deadline = _time.perf_counter() + timeout_sec if timeout_sec > 0.0 else None
 
     cdef char[:, :] pops = np.zeros((total_pop, n_items), dtype=np.int8)
-    cdef double[:] scores = np.zeros(total_pop, dtype=np.float64)
+    scores_arr = np.zeros(total_pop, dtype=np.float64)
+    cdef double[:] scores = scores_arr
     cdef char[:, :] temp_pops = np.zeros((pop_size, n_items), dtype=np.int8)
     cdef double[:] temp_scores = np.zeros(pop_size, dtype=np.float64)
+    cx1_arr = np.empty(crossover_size, dtype=np.int32)
+    cx2_arr = np.empty(crossover_size, dtype=np.int32)
+    cx1 = cx1_arr
+    cx2 = cx2_arr
 
     cdef int** gc_buffers = <int**>malloc(total_pop * sizeof(int*))
     for i in range(total_pop):
@@ -281,9 +290,11 @@ def solve_knapsack_sa_parallel(
             memset(&pops[i, 0], 0, n_items * sizeof(char))
             _run_sa_on_block(&pops[i, 0], &scores[i], values, weights, capacities, item_groups, n_items, n_groups, group_max, iter_per_ind, conflict_masks, gen, bonus_t1, bonus_t2, bonus_t3, bonus_val, gc_buffers[i], best_sol_buffers[i], base_seed ^ <unsigned int>(i * 777 + gen))
 
-        # 2. 交叉 (事前にインデックスを計算してprangeで並列実行)
-        cx1 = np.random.randint(0, pop_size + rand_add_size, crossover_size).astype(np.int32)
-        cx2 = np.random.randint(0, pop_size + rand_add_size, crossover_size).astype(np.int32)
+        # 2. 交叉 (Python/NumPy RNG 呼び出しを避け、C側乱数で親を選択)
+        sel_rng.a = base_seed ^ <unsigned int>(gen * 1000003 + 97)
+        for i in range(crossover_size):
+            cx1[i] = <int>(xorshift_next(&sel_rng) % <unsigned int>pool_size)
+            cx2[i] = <int>(xorshift_next(&sel_rng) % <unsigned int>pool_size)
         for i in prange(pop_size + rand_add_size, total_pop, nogil=True):
             _greedy_crossover(&pops[<int>cx1[i - pop_size - rand_add_size], 0], &pops[<int>cx2[i - pop_size - rand_add_size], 0], &pops[i, 0], item_groups, weights, capacities, conflict_masks, n_items, n_groups, group_max, s_idx_desc, gc_buffers[i])
 
@@ -291,15 +302,17 @@ def solve_knapsack_sa_parallel(
         for i in prange(total_pop, nogil=True):
             _run_sa_on_block(&pops[i, 0], &scores[i], values, weights, capacities, item_groups, n_items, n_groups, group_max, iter_per_ind, conflict_masks, gen, bonus_t1, bonus_t2, bonus_t3, bonus_val, gc_buffers[i], best_sol_buffers[i], base_seed ^ <unsigned int>(i * 123 + gen))
 
-        sorted_indices = np.argsort(-np.asarray(scores))
+        sorted_indices = np.argsort(-scores_arr)
         best_idx = sorted_indices[0]
         if scores[best_idx] > last_best:
             last_best = scores[best_idx]
             no_improvement = 0
-            print(f"Gen {gen:03d}: Improved! Best Score = {last_best:.1f}")
+            if verbose:
+                print(f"Gen {gen:03d}: Improved! Best Score = {last_best:.1f}")
         else:
             no_improvement += 1
-            print(f"Gen {gen:03d}: No Improvement ({no_improvement}/{patience})")
+            if verbose:
+                print(f"Gen {gen:03d}: No Improvement ({no_improvement}/{patience})")
 
         # 世代交代
         for i in range(pop_size):
@@ -311,7 +324,8 @@ def solve_knapsack_sa_parallel(
             scores[i] = temp_scores[i]
         
         if deadline is not None and _time.perf_counter() >= deadline:
-            print(f"Gen {gen:03d}: Time limit reached.")
+            if verbose:
+                print(f"Gen {gen:03d}: Time limit reached.")
             break
 
         if no_improvement >= patience:
@@ -504,7 +518,7 @@ def solve_knapsack_sa_timed(
     int[:] values, int[:, :] weights, int[:] capacities, int[:] item_groups,
     int[:, :] conflict_pairs, int n_items, int n_groups, int group_max,
     int bonus_t1, int bonus_t2, int bonus_t3, double bonus_val,
-    double timeout_sec, int chunk_iter=5000000
+    double timeout_sec, int chunk_iter=5000000, bint verbose=True
 ):
     """timeout_sec 秒間、SAをチャンク単位で繰り返して最良解を返す。"""
     import time as _time
@@ -545,7 +559,8 @@ def solve_knapsack_sa_timed(
             if chunk_score > best_score_global:
                 best_score_global = chunk_score
                 memcpy(&best_sol_global[0], &sol[0], n_items * sizeof(char))
-                print(f"  Run {run_idx}: New best = {best_score_global:.1f}")
+                if verbose:
+                    print(f"  Run {run_idx}: New best = {best_score_global:.1f}")
             run_idx += 1
     finally:
         free(gc_buf)

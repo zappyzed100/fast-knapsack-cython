@@ -101,6 +101,7 @@ class CythonBenchmarker:
                 int(self.bonus_thresholds[2]),
                 float(self.bonus_value),
                 float(timeout_sec),
+                verbose=False,
             )
         else:
             print(f"--- 1. Starting Cython Single SA (iters={iterations}) ---")
@@ -183,6 +184,7 @@ class CythonBenchmarker:
             iter_per_ind=1000000,
             patience=999 if timeout_sec is not None else patience,
             timeout_sec=float(timeout_sec) if timeout_sec is not None else 0.0,
+            verbose=False if timeout_sec is not None else True,
         )
         el2 = time.perf_counter() - st2
         eval2 = evaluate_solution(
