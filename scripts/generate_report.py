@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 TIME_BUDGETS = [1, 10, 30, 60]
-SA_ONLY_BUDGETS = [0.03]
+SA_ONLY_BUDGETS = [0.05]
 SA_ONLY_SOLVERS = {"cython_single_sa", "numba_single_sa"}
 MAX_SAMPLES_PER_SOLVER = 20
 
@@ -248,7 +248,7 @@ def save_ribbon_line_chart(records, budgets, output_png):
     fig.text(
         0.5,
         0.03,
-        "注: 横軸は実時間差の比例ではなく、0.03, 1, 10, 30, 60 秒を指定順で等間隔配置",
+        "注: 横軸は実時間差の比例ではなく、0.05, 1, 10, 30, 60 秒を指定順で等間隔配置",
         ha="center",
         fontsize=9,
     )
@@ -409,7 +409,7 @@ def main():
             "各予算について、時間窓内 (budget < 実行時間 < budget+バッファ) のデータから、ソルバーごとに最新20件までを集計し、目的関数値の平均・標準偏差・試行数を表示しています。\n\n"
         )
         f.write(
-            "注: メイン線グラフとΔスコア図の横軸は、0.03・1・10・30・60秒を実時間比ではなく指定順で等間隔に配置しています。\n\n"
+            "注: メイン線グラフとΔスコア図の横軸は、0.05・1・10・30・60秒を実時間比ではなく指定順で等間隔に配置しています。\n\n"
         )
 
         for budget in SA_ONLY_BUDGETS:
