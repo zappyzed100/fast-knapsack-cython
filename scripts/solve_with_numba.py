@@ -327,6 +327,8 @@ def solve_knapsack_evolution_numba(
     max_generations=1000,
     iter_per_ind=1000000,
     patience=10,
+    min_generations=30,
+    base_seed=42,
 ):
     total_pop = pop_size + rand_add_size + crossover_size
     conflict_masks = _init_masks_numba(conflict_pairs)
@@ -340,13 +342,11 @@ def solve_knapsack_evolution_numba(
     scores = np.zeros(total_pop, dtype=float64)
     temp_scores = np.zeros(pop_size, dtype=float64)
     if np.any(initial_sol):
-        for i in range(pop_size):
-            pops[i] = initial_sol.copy()
+        # 初期解の全面コピーは多様性を下げるため、エリート1個体のみ固定で保持する
+        pops[0] = initial_sol.copy()
 
     last_best = -1.0
     no_improvement = 0
-    base_seed = 42
-
     for gen in range(max_generations):
         for i in prange(pop_size, pop_size + rand_add_size):
             pops[i] = np.zeros(n_items, dtype=int8)
@@ -421,7 +421,7 @@ def solve_knapsack_evolution_numba(
         else:
             no_improvement += 1
 
-        if no_improvement >= patience:
+        if (gen + 1) >= min_generations and no_improvement >= patience:
             break
 
         for i in range(pop_size):
@@ -523,6 +523,7 @@ class NumbaBenchmarker:
 
         # 2. 進化計算
         st2 = time.perf_counter()
+        evo_seed = int(time.time_ns() & 0xFFFFFFFF)
         score_evo, sol_evo = solve_knapsack_evolution_numba(
             sol_sa,
             v,
@@ -543,6 +544,8 @@ class NumbaBenchmarker:
             max_generations=1000,
             iter_per_ind=iterations,
             patience=patience,
+            min_generations=30,
+            base_seed=evo_seed,
         )
         el2 = time.perf_counter() - st2
         eval2 = evaluate_solution(
