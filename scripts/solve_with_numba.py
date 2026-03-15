@@ -786,22 +786,21 @@ class NumbaBenchmarker:
         )
         n_items, n_groups = len(df), int(g.max() + 1)
 
-        if timeout_sec is not None:
-            print("--- Warming up Numba kernels (excluded from timeout) ---")
-            _warmup_numba_kernels(
-                v,
-                w,
-                caps,
-                g,
-                confs,
-                n_items,
-                n_groups,
-                10,
-                int(bonus_thresholds[0]),
-                int(bonus_thresholds[1]),
-                int(bonus_thresholds[2]),
-                float(bonus_value),
-            )
+        print("--- Warming up Numba kernels (excluded from timing) ---")
+        _warmup_numba_kernels(
+            v,
+            w,
+            caps,
+            g,
+            confs,
+            n_items,
+            n_groups,
+            10,
+            int(bonus_thresholds[0]),
+            int(bonus_thresholds[1]),
+            int(bonus_thresholds[2]),
+            float(bonus_value),
+        )
 
         # 1. 単体 SA
         if timeout_sec is not None:
