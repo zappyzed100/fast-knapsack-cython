@@ -32,7 +32,6 @@ uv run python scripts/generate_and_save_problem.py
 
 ```bash
 uv run python src/solver_cython/setup.py build_ext --inplace
-Copy-Item -Force .\build\lib.win-amd64-cpython-314\solver_cython\core.cp314-win_amd64.pyd .\src\solver_cython\core.cp314-win_amd64.pyd
 ```
 
 ### 4. ソルバーを実行
