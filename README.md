@@ -52,10 +52,10 @@ uv run python scripts/run_timeout_experiments.py
 
 `run_timeout_experiments.py` は、デフォルトで全ソルバーを各時間予算ごとに20回実行します。
 
-例: Cython と Numba の 100 秒だけ再実行:
+例: Cython と Numba の 60 秒だけ再実行:
 
 ```bash
-uv run python scripts/run_timeout_experiments.py --solvers cython,numba --timeouts 100
+uv run python scripts/run_timeout_experiments.py --solvers cython,numba --timeouts 60
 ```
 
 ### 5. レポートを生成
