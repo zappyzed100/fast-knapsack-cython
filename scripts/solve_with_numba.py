@@ -774,7 +774,14 @@ class NumbaBenchmarker:
         self.csv_path = os.path.join(PROJECT_ROOT, "data", "problem_data.csv")
         self.constraints_path = os.path.join(PROJECT_ROOT, "data", "constraints.txt")
 
-    def run(self, iterations=10000000, patience=10, full_output=True, timeout_sec=None):
+    def run(
+        self,
+        iterations=10000000,
+        patience=10,
+        full_output=True,
+        timeout_sec=None,
+        single_sa_only=False,
+    ):
         df = pd.read_csv(self.csv_path)
         caps, confs, bonus_thresholds, bonus_value = parse_constraints(
             self.constraints_path
@@ -865,6 +872,10 @@ class NumbaBenchmarker:
             objective_value=int(score_sa),
             full_output=full_output,
         )
+
+        if single_sa_only:
+            print("--- single-sa-only enabled: skipping Numba Evolution ---")
+            return
 
         # 2. 進化計算
         if timeout_sec is not None:
@@ -962,6 +973,11 @@ if __name__ == "__main__":
         default=True,
         help="Output full selected item/group lists (default: true). Use --no-full-output for preview mode.",
     )
+    parser.add_argument(
+        "--single-sa-only",
+        action="store_true",
+        help="Run only single SA and skip hybrid evolution.",
+    )
     args = parser.parse_args()
     iterations = args.iter if args.iter is not None else 10000000
     NumbaBenchmarker().run(
@@ -969,4 +985,5 @@ if __name__ == "__main__":
         patience=args.patience,
         full_output=args.full_output,
         timeout_sec=args.timeout,
+        single_sa_only=args.single_sa_only,
     )

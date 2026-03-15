@@ -78,7 +78,14 @@ class CythonBenchmarker:
             f.write(result_text)
         print(result_text)
 
-    def run(self, iterations=10000000, patience=10, full_output=True, timeout_sec=None):
+    def run(
+        self,
+        iterations=10000000,
+        patience=10,
+        full_output=True,
+        timeout_sec=None,
+        single_sa_only=False,
+    ):
         self.load_all_data()
 
         # ---------------------------------------------------------
@@ -152,6 +159,10 @@ class CythonBenchmarker:
             objective_value=int(score1),
             full_output=full_output,
         )
+
+        if single_sa_only:
+            print("--- single-sa-only enabled: skipping Hybrid GA-SA ---")
+            return
 
         # ---------------------------------------------------------
         # 2. 並列進化計算 (Hybrid GA-SA)
@@ -230,6 +241,11 @@ if __name__ == "__main__":
         default=True,
         help="Output full selected item/group lists (default: true). Use --no-full-output for preview mode.",
     )
+    parser.add_argument(
+        "--single-sa-only",
+        action="store_true",
+        help="Run only single SA and skip hybrid evolution.",
+    )
     args = parser.parse_args()
 
     # --timeout 未指定 かつ --iter 未指定の場合はデフォルト 10000000
@@ -241,4 +257,5 @@ if __name__ == "__main__":
         patience=args.patience,
         full_output=args.full_output,
         timeout_sec=args.timeout,
+        single_sa_only=args.single_sa_only,
     )
