@@ -27,15 +27,24 @@ def parse_result_file(file_path):
 
         # 各項目を抽出
         solver_match = re.search(r"Solver:\s*([^\n\r]+)", section)
+        # 現行フォーマットは "Objective Value (Solver)" と
+        # "Recalculated Score" の両方を出すため、再計算値を優先して採用する。
+        recalc_match = re.search(r"Recalculated Score:\s*([\d\.]+)", section)
         obj_match = re.search(
-            r"(?:Objective Value \(Score\)|Score):\s*([\d\.]+)", section
+            r"Objective Value \((?:Solver|Score)\):\s*([\d\.]+)", section
         )
+        score_match = re.search(r"Score:\s*([\d\.]+)", section)
         time_match = re.search(r"(?:Execution Time|Time):\s*([\d\.]+)", section)
         status_match = re.search(r"Status:\s*([^\n\r]+)", section)
 
-        if solver_match and obj_match and time_match:
+        if solver_match and time_match and (recalc_match or obj_match or score_match):
             solver_name = solver_match.group(1).strip()
-            obj_val = int(float(obj_match.group(1)))
+            if recalc_match:
+                obj_val = int(float(recalc_match.group(1)))
+            elif obj_match:
+                obj_val = int(float(obj_match.group(1)))
+            else:
+                obj_val = int(float(score_match.group(1)))
             time_val = float(time_match.group(1))
             raw_status = status_match.group(1).strip() if status_match else "SATISFIED"
 
