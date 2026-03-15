@@ -19,4 +19,6 @@ data/data.dzn
 knapsack_tuning.db
 
 # 実行結果アーティファクト
-results/
+results/*
+!results/reports/
+!results/reports/**
