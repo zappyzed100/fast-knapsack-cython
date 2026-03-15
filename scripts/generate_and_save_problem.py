@@ -7,7 +7,7 @@ import pandas as pd
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = PROJECT_ROOT / "data"
 BONUS_THRESHOLDS = (3, 4, 5)
-BONUS_VALUE = 3
+BONUS_VALUE = 20
 
 
 def generate_and_save_problem(
