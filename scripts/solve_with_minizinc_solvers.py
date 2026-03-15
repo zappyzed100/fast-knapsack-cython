@@ -115,6 +115,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--timeout", type=int, default=100)
     parser.add_argument(
+        "--solvers",
+        type=str,
+        default="cp-sat,gecode,cbc",
+        help="Comma-separated solvers (e.g. gecode,cbc)",
+    )
+    parser.add_argument(
         "--full-output",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -122,10 +128,19 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    solvers = ["cp-sat", "gecode", "cbc"]
+    solvers = [s.strip() for s in args.solvers.split(",") if s.strip()]
+    if not solvers:
+        raise SystemExit("No solvers specified. Use --solvers.")
+
+    any_failed = False
     for solver_name in solvers:
-        run_single_benchmark(
+        ok = run_single_benchmark(
             solver_name,
             timeout_sec=args.timeout,
             full_output=args.full_output,
         )
+        if not ok:
+            any_failed = True
+
+    if any_failed:
+        raise SystemExit(1)

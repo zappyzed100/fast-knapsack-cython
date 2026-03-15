@@ -16,5 +16,6 @@ ext_modules = [
 setup(
     name="fast-knapsack-cython-core",
     ext_modules=cythonize(ext_modules, compiler_directives={"language_level": "3"}),
-    packages=[],  # パッケージ自動検出を無効化
+    packages=["solver_cython"],
+    package_dir={"": "src"},
 )
