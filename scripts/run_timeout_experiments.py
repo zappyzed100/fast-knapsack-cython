@@ -7,8 +7,9 @@ import time
 
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-TIMEOUTS = [1, 10, 30, 60, 100]
+TIMEOUTS = [0.03, 1, 10, 30, 60, 100]
 DEFAULT_REPEATS = 20
+SA_ONLY_TIMEOUT = 0.03
 
 
 def build_solver_jobs(no_full_output=True, stochastic_repeats=DEFAULT_REPEATS):
@@ -43,11 +44,27 @@ def run_command(cmd, cwd):
     return subprocess.run(cmd, cwd=cwd, check=False)
 
 
+def is_sa_only_timeout(timeout_sec):
+    return abs(float(timeout_sec) - SA_ONLY_TIMEOUT) < 1e-12
+
+
+def should_run_job(job_name, timeout_sec):
+    if is_sa_only_timeout(timeout_sec):
+        return job_name in {"cython", "numba"}
+    return True
+
+
+def extra_args_for(job_name, timeout_sec):
+    if is_sa_only_timeout(timeout_sec) and job_name in {"cython", "numba"}:
+        return ["--single-sa-only"]
+    return []
+
+
 def main():
     parser = argparse.ArgumentParser(
         description=(
             "Run timeout experiments for all solvers. "
-            "Defaults: timeouts=1,10,30,60,100 and repeats=20."
+            "Defaults: timeouts=0.03,1,10,30,60,100 and repeats=20."
         )
     )
     parser.add_argument(
@@ -77,7 +94,7 @@ def main():
         "--timeouts",
         type=str,
         default=None,
-        help="Comma-separated list of timeouts to run (e.g. 60,100). Default: all",
+        help="Comma-separated list of timeouts to run (e.g. 0.03,60,100). Default: all",
     )
     args = parser.parse_args()
 
@@ -91,9 +108,14 @@ def main():
 
     active_timeouts = TIMEOUTS
     if args.timeouts:
-        active_timeouts = [int(t.strip()) for t in args.timeouts.split(",")]
+        active_timeouts = [float(t.strip()) for t in args.timeouts.split(",")]
 
-    total = sum(len(active_timeouts) * job["repeats"] for job in jobs)
+    total = sum(
+        job["repeats"]
+        for timeout_sec in active_timeouts
+        for job in jobs
+        if should_run_job(job["name"], timeout_sec)
+    )
 
     print("=== Timeout experiment runner ===")
     print(f"Project root: {PROJECT_ROOT}")
@@ -109,6 +131,8 @@ def main():
 
     for timeout_sec in active_timeouts:
         for job in jobs:
+            if not should_run_job(job["name"], timeout_sec):
+                continue
             for repeat in range(1, job["repeats"] + 1):
                 run_index += 1
                 now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -123,6 +147,7 @@ def main():
                     "--timeout",
                     str(timeout_sec),
                     *job["args"],
+                    *extra_args_for(job["name"], timeout_sec),
                 ]
 
                 result = run_command(cmd, cwd=PROJECT_ROOT)
