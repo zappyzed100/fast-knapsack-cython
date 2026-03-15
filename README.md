@@ -50,6 +50,8 @@ uv run python scripts/solve_with_minizinc_solvers.py --timeout 10 --no-full-outp
 uv run python scripts/run_timeout_experiments.py
 ```
 
+`run_timeout_experiments.py` は、デフォルトで全ソルバーを各時間予算ごとに20回実行します。
+
 例: Cython と Numba の 100 秒だけ再実行:
 
 ```bash
@@ -104,8 +106,8 @@ uv run python scripts/generate_report.py
 
 評価方針:
 
-- 決定論的ソルバーは各時間予算で1系列として扱う
-- 確率的ソルバーは複数回実行し、平均・標準偏差で比較する
+- 全ソルバーを複数回実行し、平均・標準偏差で比較する
+- Cbc / Gecode は分散が小さいことが多いが、CP-SAT は時間制限下で結果がばらつく場合がある
 
 時間予算:
 
