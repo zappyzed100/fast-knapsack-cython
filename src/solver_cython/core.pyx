@@ -409,12 +409,13 @@ def solve_knapsack_sa(
                         if not conflict:
                             # ボーナス差分計算
                             bonus_diff = 0.0
-                            # 削除の影響
-                            if group_counts[g_rem] == bonus_t1 or group_counts[g_rem] == bonus_t2 or group_counts[g_rem] == bonus_t3:
-                                bonus_diff -= bonus_val
-                            # 追加の影響
-                            if group_counts[g_add] == bonus_t1 - 1 or group_counts[g_add] == bonus_t2 - 1 or group_counts[g_add] == bonus_t3 - 1:
-                                bonus_diff += bonus_val
+                            if g_add != g_rem:
+                                # 削除の影響
+                                if group_counts[g_rem] == bonus_t1 or group_counts[g_rem] == bonus_t2 or group_counts[g_rem] == bonus_t3:
+                                    bonus_diff -= bonus_val
+                                # 追加の影響
+                                if group_counts[g_add] == bonus_t1 - 1 or group_counts[g_add] == bonus_t2 - 1 or group_counts[g_add] == bonus_t3 - 1:
+                                    bonus_diff += bonus_val
                             
                             val_diff = <double>(values[add_idx] - values[rem_idx])
                             diff = val_diff + bonus_diff
