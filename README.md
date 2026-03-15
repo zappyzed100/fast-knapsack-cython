@@ -9,25 +9,7 @@
 
 主眼は「最適性証明」ではなく、時間制約下でどこまで高品質な実行可能解に到達できるかを、統計的に比較可能な形で示すことです。
 
-## クイックスタート
-
-`uv` を使う前提です。
-
-```bash
-uv sync
-uv run python scripts/generate_and_save_problem.py
-uv run python scripts/run_timeout_experiments.py
-uv run python scripts/generate_report.py
-```
-
-Cython 拡張を使う場合のみ、先に次を実行します。
-
-```bash
-uv run python src/solver_cython/setup.py build_ext --inplace
-Copy-Item -Force .\build\lib.win-amd64-cpython-314\solver_cython\core.cp314-win_amd64.pyd .\src\solver_cython\core.cp314-win_amd64.pyd
-```
-
-## 実行手順（詳細）
+## 実行手順
 
 ### 1. 環境セットアップ
 
