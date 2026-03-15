@@ -696,6 +696,79 @@ def _solve_evolution_timed_py(
     return best_score_global, best_sol_global
 
 
+def _warmup_numba_kernels(
+    values,
+    weights,
+    capacities,
+    item_groups,
+    conflict_pairs,
+    n_items,
+    n_groups,
+    group_max,
+    bonus_t1,
+    bonus_t2,
+    bonus_t3,
+    bonus_val,
+):
+    """JIT初回コンパイルを先に済ませ、timeout計測に含めない。"""
+    conflict_masks = _init_masks_numba(conflict_pairs)
+
+    # SAカーネルを軽量条件で1回呼び、コンパイルを完了させる
+    _run_sa_numba(
+        np.zeros(n_items, dtype=np.int8),
+        values,
+        weights,
+        capacities,
+        item_groups,
+        n_items,
+        n_groups,
+        group_max,
+        16,
+        conflict_masks,
+        0,
+        12345,
+        bonus_t1,
+        bonus_t2,
+        bonus_t3,
+        bonus_val,
+    )
+
+    # 進化1世代カーネルも軽量条件で1回呼び、コンパイルを完了させる
+    pop_size = 2
+    rand_add_size = 1
+    crossover_size = 1
+    total_pop = pop_size + rand_add_size + crossover_size
+    pops = np.zeros((total_pop, n_items), dtype=np.int8)
+    scores = np.zeros(total_pop, dtype=np.float64)
+    densities = values.astype(np.float64) / (
+        1.0 + weights[:, 0] + weights[:, 1] + weights[:, 2]
+    )
+    s_idx_desc = np.argsort(-densities).astype(np.int32)
+    _evolve_single_gen_numba(
+        pops,
+        scores,
+        values,
+        weights,
+        capacities,
+        item_groups,
+        n_items,
+        n_groups,
+        group_max,
+        16,
+        conflict_masks,
+        0,
+        bonus_t1,
+        bonus_t2,
+        bonus_t3,
+        bonus_val,
+        pop_size,
+        rand_add_size,
+        crossover_size,
+        s_idx_desc,
+        67890,
+    )
+
+
 class NumbaBenchmarker:
     def __init__(self):
         self.csv_path = os.path.join(PROJECT_ROOT, "data", "problem_data.csv")
@@ -712,6 +785,23 @@ class NumbaBenchmarker:
             df["group_id"].values.astype(np.int32),
         )
         n_items, n_groups = len(df), int(g.max() + 1)
+
+        if timeout_sec is not None:
+            print("--- Warming up Numba kernels (excluded from timeout) ---")
+            _warmup_numba_kernels(
+                v,
+                w,
+                caps,
+                g,
+                confs,
+                n_items,
+                n_groups,
+                10,
+                int(bonus_thresholds[0]),
+                int(bonus_thresholds[1]),
+                int(bonus_thresholds[2]),
+                float(bonus_value),
+            )
 
         # 1. 単体 SA
         if timeout_sec is not None:
