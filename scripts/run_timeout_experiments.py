@@ -7,9 +7,10 @@ import time
 
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-TIMEOUTS = [0.03, 1, 10, 30, 60, 100]
+# 極短時間枠は実行オーバーヘッドを含めた実測ベースで調整する。
+TIMEOUTS = [0.05, 1, 10, 30, 60, 100]
 DEFAULT_REPEATS = 20
-SA_ONLY_TIMEOUT = 0.03
+SA_ONLY_TIMEOUT = 0.05
 
 
 def build_solver_jobs(no_full_output=True, stochastic_repeats=DEFAULT_REPEATS):
@@ -64,7 +65,7 @@ def main():
     parser = argparse.ArgumentParser(
         description=(
             "Run timeout experiments for all solvers. "
-            "Defaults: timeouts=0.03,1,10,30,60,100 and repeats=20."
+            "Defaults: timeouts=0.05,1,10,30,60,100 and repeats=20."
         )
     )
     parser.add_argument(
@@ -94,7 +95,7 @@ def main():
         "--timeouts",
         type=str,
         default=None,
-        help="Comma-separated list of timeouts to run (e.g. 0.03,60,100). Default: all",
+        help="Comma-separated list of timeouts to run (e.g. 0.05,60,100). Default: all",
     )
     args = parser.parse_args()
 
