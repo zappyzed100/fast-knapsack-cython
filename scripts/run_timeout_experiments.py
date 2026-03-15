@@ -8,7 +8,7 @@ import time
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 # 極短時間枠は実行オーバーヘッドを含めた実測ベースで調整する。
-TIMEOUTS = [0.05, 1, 10, 30, 60, 100]
+TIMEOUTS = [0.05, 1, 10, 30, 60]
 DEFAULT_REPEATS = 20
 SA_ONLY_TIMEOUT = 0.05
 
