@@ -17,3 +17,6 @@ data/problem_description.txt
 data/constraints.txt
 data/data.dzn
 knapsack_tuning.db
+
+# 実行結果アーティファクト
+results/

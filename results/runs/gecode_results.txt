@@ -1,7 +1,0 @@
-[2026-03-12 02:30:19]
-Solver: gecode
-Status: SATISFIED
-Validation: VALID
-Objective Value (Score): 3957
-Execution Time: 100.1280 seconds
---------------------------------------------------
