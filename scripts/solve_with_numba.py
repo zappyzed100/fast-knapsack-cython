@@ -461,26 +461,53 @@ def save_result(
     print(result_text)
 
 
-
-
 # ---------------------------------------------------------
 # 4b. 1世代分の進化計算カーネル (タイムアウト版の外側ループ用)
 # ---------------------------------------------------------
 @njit(parallel=True)
 def _evolve_single_gen_numba(
-    pops, scores, values, weights, capacities, item_groups,
-    n_items, n_groups, group_max, iter_per_ind, conflict_masks,
-    gen, bonus_t1, bonus_t2, bonus_t3, bonus_val,
-    pop_size, rand_add_size, crossover_size, s_idx_desc, base_seed,
+    pops,
+    scores,
+    values,
+    weights,
+    capacities,
+    item_groups,
+    n_items,
+    n_groups,
+    group_max,
+    iter_per_ind,
+    conflict_masks,
+    gen,
+    bonus_t1,
+    bonus_t2,
+    bonus_t3,
+    bonus_val,
+    pop_size,
+    rand_add_size,
+    crossover_size,
+    s_idx_desc,
+    base_seed,
 ):
     total_pop = pop_size + rand_add_size + crossover_size
     for i in prange(pop_size, pop_size + rand_add_size):
         pops[i] = np.zeros(n_items, dtype=int8)
         s, sol = _run_sa_numba(
-            pops[i], values, weights, capacities, item_groups,
-            n_items, n_groups, group_max, iter_per_ind, conflict_masks,
-            gen, base_seed ^ (i * 777 + gen),
-            bonus_t1, bonus_t2, bonus_t3, bonus_val,
+            pops[i],
+            values,
+            weights,
+            capacities,
+            item_groups,
+            n_items,
+            n_groups,
+            group_max,
+            iter_per_ind,
+            conflict_masks,
+            gen,
+            base_seed ^ (i * 777 + gen),
+            bonus_t1,
+            bonus_t2,
+            bonus_t3,
+            bonus_val,
         )
         scores[i] = s
         pops[i] = sol
@@ -494,16 +521,35 @@ def _evolve_single_gen_numba(
     for i in prange(crossover_size):
         pop_idx = pop_size + rand_add_size + i
         pops[pop_idx] = _greedy_crossover_numba(
-            pops[cx1[i]], pops[cx2[i]],
-            item_groups, weights, capacities, conflict_masks,
-            n_items, n_groups, group_max, s_idx_desc,
+            pops[cx1[i]],
+            pops[cx2[i]],
+            item_groups,
+            weights,
+            capacities,
+            conflict_masks,
+            n_items,
+            n_groups,
+            group_max,
+            s_idx_desc,
         )
     for i in prange(total_pop):
         s, sol = _run_sa_numba(
-            pops[i], values, weights, capacities, item_groups,
-            n_items, n_groups, group_max, iter_per_ind, conflict_masks,
-            gen, base_seed ^ (i * 123 + gen),
-            bonus_t1, bonus_t2, bonus_t3, bonus_val,
+            pops[i],
+            values,
+            weights,
+            capacities,
+            item_groups,
+            n_items,
+            n_groups,
+            group_max,
+            iter_per_ind,
+            conflict_masks,
+            gen,
+            base_seed ^ (i * 123 + gen),
+            bonus_t1,
+            bonus_t2,
+            bonus_t3,
+            bonus_val,
         )
         scores[i] = s
         pops[i] = sol
@@ -513,9 +559,21 @@ def _evolve_single_gen_numba(
 # 5. Python レベルのタイムアウト付き実行関数
 # ---------------------------------------------------------
 def _solve_sa_timed_py(
-    values, weights, capacities, item_groups, conflict_pairs,
-    n_items, n_groups, group_max, bonus_t1, bonus_t2, bonus_t3, bonus_val,
-    timeout_sec, chunk_iter=5000000,
+    values,
+    weights,
+    capacities,
+    item_groups,
+    conflict_pairs,
+    n_items,
+    n_groups,
+    group_max,
+    bonus_t1,
+    bonus_t2,
+    bonus_t3,
+    bonus_val,
+    timeout_sec,
+    chunk_iter=5000000,
+    verbose=True,
 ):
     deadline = time.perf_counter() + timeout_sec
     conflict_masks = _init_masks_numba(conflict_pairs)
@@ -526,24 +584,52 @@ def _solve_sa_timed_py(
     while time.perf_counter() < deadline:
         sol = np.zeros(n_items, dtype=np.int8)
         score, sol = _run_sa_numba(
-            sol, values, weights, capacities, item_groups,
-            n_items, n_groups, group_max, chunk_iter, conflict_masks,
-            run_idx, seed_base ^ (run_idx * 1000003),
-            bonus_t1, bonus_t2, bonus_t3, bonus_val,
+            sol,
+            values,
+            weights,
+            capacities,
+            item_groups,
+            n_items,
+            n_groups,
+            group_max,
+            chunk_iter,
+            conflict_masks,
+            run_idx,
+            seed_base ^ (run_idx * 1000003),
+            bonus_t1,
+            bonus_t2,
+            bonus_t3,
+            bonus_val,
         )
         if score > best_score:
             best_score = score
             best_sol = sol.copy()
-            print(f"  Run {run_idx}: New best = {best_score:.1f}")
+            if verbose:
+                print(f"  Run {run_idx}: New best = {best_score:.1f}")
         run_idx += 1
     return best_score, best_sol
 
 
 def _solve_evolution_timed_py(
-    initial_sol, values, weights, capacities, item_groups, conflict_pairs,
-    n_items, n_groups, group_max, bonus_t1, bonus_t2, bonus_t3, bonus_val,
-    timeout_sec, pop_size=20, rand_add_size=20, crossover_size=50,
+    initial_sol,
+    values,
+    weights,
+    capacities,
+    item_groups,
+    conflict_pairs,
+    n_items,
+    n_groups,
+    group_max,
+    bonus_t1,
+    bonus_t2,
+    bonus_t3,
+    bonus_val,
+    timeout_sec,
+    pop_size=20,
+    rand_add_size=20,
+    crossover_size=50,
     iter_per_ind=1000000,
+    verbose=True,
 ):
     deadline = time.perf_counter() + timeout_sec
     total_pop = pop_size + rand_add_size + crossover_size
@@ -564,10 +650,27 @@ def _solve_evolution_timed_py(
     gen = 0
     while time.perf_counter() < deadline:
         _evolve_single_gen_numba(
-            pops, scores, values, weights, capacities, item_groups,
-            n_items, n_groups, group_max, iter_per_ind, conflict_masks,
-            gen, bonus_t1, bonus_t2, bonus_t3, bonus_val,
-            pop_size, rand_add_size, crossover_size, s_idx_desc, base_seed,
+            pops,
+            scores,
+            values,
+            weights,
+            capacities,
+            item_groups,
+            n_items,
+            n_groups,
+            group_max,
+            iter_per_ind,
+            conflict_masks,
+            gen,
+            bonus_t1,
+            bonus_t2,
+            bonus_t3,
+            bonus_val,
+            pop_size,
+            rand_add_size,
+            crossover_size,
+            s_idx_desc,
+            base_seed,
         )
         sorted_idx = np.argsort(-scores)
         best_this_gen = scores[sorted_idx[0]]
@@ -577,17 +680,21 @@ def _solve_evolution_timed_py(
             if best_this_gen > best_score_global:
                 best_score_global = best_this_gen
                 best_sol_global = pops[sorted_idx[0]].copy()
-            print(f"Gen {gen:03d}: Improved! Best Score = {last_best:.1f}")
+            if verbose:
+                print(f"Gen {gen:03d}: Improved! Best Score = {last_best:.1f}")
         else:
             no_improvement += 1
-            print(f"Gen {gen:03d}: No Improvement ({no_improvement})")
+            if verbose:
+                print(f"Gen {gen:03d}: No Improvement ({no_improvement})")
         elite_pops = pops[sorted_idx[:pop_size]].copy()
         elite_scores = scores[sorted_idx[:pop_size]].copy()
         pops[:pop_size] = elite_pops
         scores[:pop_size] = elite_scores
         gen += 1
-    print(f"Gen {gen:03d}: Time limit reached.")
+    if verbose:
+        print(f"Gen {gen:03d}: Time limit reached.")
     return best_score_global, best_sol_global
+
 
 class NumbaBenchmarker:
     def __init__(self):
@@ -611,13 +718,20 @@ class NumbaBenchmarker:
             print(f"--- 1. Starting Numba Single SA (timeout={timeout_sec}s) ---")
             st1 = time.perf_counter()
             score_sa, sol_sa = _solve_sa_timed_py(
-                v, w, caps, g, confs,
-                n_items, n_groups, 10,
+                v,
+                w,
+                caps,
+                g,
+                confs,
+                n_items,
+                n_groups,
+                10,
                 int(bonus_thresholds[0]),
                 int(bonus_thresholds[1]),
                 int(bonus_thresholds[2]),
                 float(bonus_value),
                 float(timeout_sec),
+                verbose=False,
             )
         else:
             print(f"--- 1. Starting Numba Single SA (iters={iterations}) ---")
@@ -625,9 +739,17 @@ class NumbaBenchmarker:
             mask = _init_masks_numba(confs)
             score_sa, sol_sa = _run_sa_numba(
                 np.zeros(n_items, dtype=np.int8),
-                v, w, caps, g,
-                n_items, n_groups, 10,
-                iterations, mask, 0, 42,
+                v,
+                w,
+                caps,
+                g,
+                n_items,
+                n_groups,
+                10,
+                iterations,
+                mask,
+                0,
+                42,
                 int(bonus_thresholds[0]),
                 int(bonus_thresholds[1]),
                 int(bonus_thresholds[2]),
@@ -636,14 +758,21 @@ class NumbaBenchmarker:
         el1 = time.perf_counter() - st1
         eval1 = evaluate_solution(
             sol_sa,
-            v, w, caps, g, confs, 10,
+            v,
+            w,
+            caps,
+            g,
+            confs,
+            10,
             bonus_val=bonus_value,
             bonus_thresholds=bonus_thresholds,
         )
         status1 = "SATISFIED" if eval1["is_valid"] else "INFEASIBLE"
         save_result(
             "numba_single_sa",
-            el1, status1, eval1,
+            el1,
+            status1,
+            eval1,
             objective_value=int(score_sa),
             full_output=full_output,
         )
@@ -653,8 +782,15 @@ class NumbaBenchmarker:
             print(f"--- 2. Starting Numba Evolution (timeout={timeout_sec}s) ---")
             st2 = time.perf_counter()
             score_evo, sol_evo = _solve_evolution_timed_py(
-                sol_sa, v, w, caps, g, confs,
-                n_items, n_groups, 10,
+                sol_sa,
+                v,
+                w,
+                caps,
+                g,
+                confs,
+                n_items,
+                n_groups,
+                10,
                 int(bonus_thresholds[0]),
                 int(bonus_thresholds[1]),
                 int(bonus_thresholds[2]),
@@ -664,14 +800,22 @@ class NumbaBenchmarker:
                 rand_add_size=20,
                 crossover_size=50,
                 iter_per_ind=1000000,
+                verbose=False,
             )
         else:
             print(f"--- 2. Starting Numba Evolution (patience={patience}) ---")
             st2 = time.perf_counter()
             evo_seed = int(time.time_ns() & 0xFFFFFFFF)
             score_evo, sol_evo = solve_knapsack_evolution_numba(
-                sol_sa, v, w, caps, g, confs,
-                n_items, n_groups, 10,
+                sol_sa,
+                v,
+                w,
+                caps,
+                g,
+                confs,
+                n_items,
+                n_groups,
+                10,
                 int(bonus_thresholds[0]),
                 int(bonus_thresholds[1]),
                 int(bonus_thresholds[2]),
@@ -688,14 +832,21 @@ class NumbaBenchmarker:
         el2 = time.perf_counter() - st2
         eval2 = evaluate_solution(
             sol_evo,
-            v, w, caps, g, confs, 10,
+            v,
+            w,
+            caps,
+            g,
+            confs,
+            10,
             bonus_val=bonus_value,
             bonus_thresholds=bonus_thresholds,
         )
         status2 = "SATISFIED" if eval2["is_valid"] else "INFEASIBLE"
         save_result(
             "numba_hybrid_evolution",
-            el2, status2, eval2,
+            el2,
+            status2,
+            eval2,
             objective_value=int(score_evo),
             full_output=full_output,
         )
