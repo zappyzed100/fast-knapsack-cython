@@ -49,6 +49,45 @@ def _bonus_on_rem_numba(gc_val, bonus_t1, bonus_t2, bonus_t3):
     return gc_val == bonus_t1 or gc_val == bonus_t2 or gc_val == bonus_t3
 
 
+@njit(inline="always")
+def _apply_remove_only_numba(
+    idx,
+    sol,
+    values,
+    weights,
+    item_groups,
+    bonus_t1,
+    bonus_t2,
+    bonus_t3,
+    bonus_val,
+    cur_w,
+    gc_buf,
+    g_bits,
+    cur_val_sum,
+    cur_bonus,
+):
+    bonus_diff = 0.0
+    if sol[idx] == 0:
+        return cur_val_sum, cur_bonus
+
+    g_rem = item_groups[idx]
+    if g_rem >= 0 and _bonus_on_rem_numba(gc_buf[g_rem], bonus_t1, bonus_t2, bonus_t3):
+        bonus_diff = -bonus_val
+
+    sol[idx] = 0
+    for k in range(3):
+        cur_w[k] -= weights[idx, k]
+
+    if g_rem >= 0:
+        gc_buf[g_rem] -= 1
+        if gc_buf[g_rem] == 0:
+            g_bits[g_rem // 64] &= ~(uint64(1) << (g_rem % 64))
+
+    cur_val_sum -= float64(values[idx])
+    cur_bonus += bonus_diff
+    return cur_val_sum, cur_bonus
+
+
 # ---------------------------------------------------------
 # 2. 高速 SA エンジン (Cython 版の移植)
 # ---------------------------------------------------------
@@ -120,7 +159,7 @@ def _run_sa_numba(
 
     for it in range(iterations):
         temp = (1.0 - (float64(it) / iterations)) * (1.0 / (1.0 + gen * 0.1))
-        add_idx = _xs_next(xs_state) % uint64(n_items)
+        add_idx = int32(_xs_next(xs_state) % uint64(n_items))
         g_add = item_groups[add_idx]
         r = _xs_double(xs_state)
 
@@ -157,7 +196,7 @@ def _run_sa_numba(
                         cur_val_sum += float64(values[add_idx])
                         cur_bonus += bonus_diff
             else:
-                rem_idx = _xs_next(xs_state) % uint64(n_items)
+                rem_idx = int32(_xs_next(xs_state) % uint64(n_items))
                 if sol[rem_idx] == 1:
                     g_rem = item_groups[rem_idx]
                     if (
@@ -226,20 +265,74 @@ def _run_sa_numba(
                             g_bits[g_rem // 64] |= uint64(1) << (g_rem % 64)
         else:
             if r < 0.02 * temp:
-                g_rem = item_groups[add_idx]
-                bonus_diff = 0.0
-                if g_rem >= 0:
-                    if _bonus_on_rem_numba(gc_buf[g_rem], bonus_t1, bonus_t2, bonus_t3):
-                        bonus_diff = -BONUS_VAL
-                sol[add_idx] = 0
-                for k in range(3):
-                    cur_w[k] -= weights[add_idx, k]
-                if g_rem >= 0:
-                    gc_buf[g_rem] -= 1
-                    if gc_buf[g_rem] == 0:
-                        g_bits[g_rem // 64] &= ~(uint64(1) << (g_rem % 64))
-                cur_val_sum -= float64(values[add_idx])
-                cur_bonus += bonus_diff
+                remove_count = 1
+                rem_idx2 = int32(-1)
+                rem_idx3 = int32(-1)
+                if r < 0.006 * temp:
+                    remove_count = 3
+                elif r < 0.012 * temp:
+                    remove_count = 2
+
+                cur_val_sum, cur_bonus = _apply_remove_only_numba(
+                    add_idx,
+                    sol,
+                    values,
+                    weights,
+                    item_groups,
+                    bonus_t1,
+                    bonus_t2,
+                    bonus_t3,
+                    BONUS_VAL,
+                    cur_w,
+                    gc_buf,
+                    g_bits,
+                    cur_val_sum,
+                    cur_bonus,
+                )
+
+                if remove_count >= 2:
+                    rem_idx2 = int32(_xs_next(xs_state) % uint64(n_items))
+                    if rem_idx2 != add_idx and sol[rem_idx2] == 1:
+                        cur_val_sum, cur_bonus = _apply_remove_only_numba(
+                            rem_idx2,
+                            sol,
+                            values,
+                            weights,
+                            item_groups,
+                            bonus_t1,
+                            bonus_t2,
+                            bonus_t3,
+                            BONUS_VAL,
+                            cur_w,
+                            gc_buf,
+                            g_bits,
+                            cur_val_sum,
+                            cur_bonus,
+                        )
+
+                if remove_count >= 3:
+                    rem_idx3 = int32(_xs_next(xs_state) % uint64(n_items))
+                    if (
+                        rem_idx3 != add_idx
+                        and rem_idx3 != rem_idx2
+                        and sol[rem_idx3] == 1
+                    ):
+                        cur_val_sum, cur_bonus = _apply_remove_only_numba(
+                            rem_idx3,
+                            sol,
+                            values,
+                            weights,
+                            item_groups,
+                            bonus_t1,
+                            bonus_t2,
+                            bonus_t3,
+                            BONUS_VAL,
+                            cur_w,
+                            gc_buf,
+                            g_bits,
+                            cur_val_sum,
+                            cur_bonus,
+                        )
 
         if cur_val_sum + cur_bonus > best_total:
             best_total = cur_val_sum + cur_bonus
