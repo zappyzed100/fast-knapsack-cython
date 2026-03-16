@@ -50,6 +50,31 @@ def _bonus_on_rem_numba(gc_val, bonus_t1, bonus_t2, bonus_t3):
 
 
 @njit(inline="always")
+def _sa_temperature_numba(it, iterations, gen):
+    if iterations <= 0:
+        return 1.0
+    progress = float64(it) / float64(iterations)
+    cool = 1.0 - progress
+    base_temp = 1.0 / (1.0 + 0.03 * gen)
+    return base_temp * (0.03 + 0.97 * cool * cool)
+
+
+@njit(inline="always")
+def _conflict_word_count_numba(n_groups):
+    return (n_groups + 63) // 64
+
+
+@njit(inline="always")
+def _has_conflict_with_active_numba(gid, g_bits, conflict_masks, n_groups, n_words):
+    if gid < 0 or gid >= n_groups:
+        return False
+    for k in range(n_words):
+        if g_bits[k] & conflict_masks[gid, k]:
+            return True
+    return False
+
+
+@njit(inline="always")
 def _apply_remove_only_numba(
     idx,
     sol,
@@ -112,8 +137,9 @@ def _run_sa_numba(
 ):
     xs_state = np.array([uint64(seed + 1)], dtype=uint64)
     BONUS_VAL = float64(bonus_val)
+    n_words = _conflict_word_count_numba(n_groups)
 
-    g_bits = np.zeros(16, dtype=uint64)
+    g_bits = np.zeros(n_words, dtype=uint64)
     cur_w = np.zeros(3, dtype=int32)
     gc_buf = np.zeros(n_groups, dtype=int32)
     cur_val_sum = 0.0
@@ -122,12 +148,9 @@ def _run_sa_numba(
     for j in range(n_items):
         if sol[j] == 1:
             g_idx = item_groups[j]
-            conflict = False
-            if 0 <= g_idx < 1024:
-                for k in range(16):
-                    if g_bits[k] & conflict_masks[g_idx, k]:
-                        conflict = True
-                        break
+            conflict = _has_conflict_with_active_numba(
+                g_idx, g_bits, conflict_masks, n_groups, n_words
+            )
 
             if (
                 conflict
@@ -158,7 +181,7 @@ def _run_sa_numba(
     best_sol_tmp = sol.copy()
 
     for it in range(iterations):
-        temp = (1.0 - (float64(it) / iterations)) * (1.0 / (1.0 + gen * 0.1))
+        temp = _sa_temperature_numba(it, iterations, gen)
         add_idx = int32(_xs_next(xs_state) % uint64(n_items))
         g_add = item_groups[add_idx]
         r = _xs_double(xs_state)
@@ -170,12 +193,9 @@ def _run_sa_numba(
                 and cur_w[2] + weights[add_idx, 2] <= capacities[2]
             ):
 
-                conflict = False
-                if 0 <= g_add < 1024:
-                    for k in range(16):
-                        if g_bits[k] & conflict_masks[g_add, k]:
-                            conflict = True
-                            break
+                conflict = _has_conflict_with_active_numba(
+                    g_add, g_bits, conflict_masks, n_groups, n_words
+                )
 
                 if not conflict and (g_add < 0 or gc_buf[g_add] < group_max):
                     bonus_diff = 0.0
@@ -211,12 +231,9 @@ def _run_sa_numba(
                         if g_rem >= 0 and gc_buf[g_rem] == 1:
                             g_bits[g_rem // 64] &= ~(uint64(1) << (g_rem % 64))
 
-                        conflict = False
-                        if 0 <= g_add < 1024:
-                            for k in range(16):
-                                if g_bits[k] & conflict_masks[g_add, k]:
-                                    conflict = True
-                                    break
+                        conflict = _has_conflict_with_active_numba(
+                            g_add, g_bits, conflict_masks, n_groups, n_words
+                        )
 
                         if not conflict and (
                             g_add < 0
@@ -345,11 +362,12 @@ def _run_sa_numba(
 # 3. 進化計算・交叉ロジック
 # ---------------------------------------------------------
 @njit
-def _init_masks_numba(confs):
-    masks = np.zeros((1024, 16), dtype=uint64)
+def _init_masks_numba(confs, n_groups):
+    n_words = _conflict_word_count_numba(n_groups)
+    masks = np.zeros((n_groups, n_words), dtype=uint64)
     for i in range(confs.shape[0]):
         u, v = confs[i, 0], confs[i, 1]
-        if u < 1024 and v < 1024:
+        if 0 <= u < n_groups and 0 <= v < n_groups:
             masks[u, v // 64] |= uint64(1) << (v % 64)
             masks[v, u // 64] |= uint64(1) << (u % 64)
     return masks
@@ -368,20 +386,18 @@ def _greedy_crossover_numba(
     group_max,
     s_idx_desc,
 ):
+    n_words = _conflict_word_count_numba(n_groups)
     child = np.zeros(n_items, dtype=int8)
     cw = np.zeros(3, dtype=int32)
     gc = np.zeros(n_groups, dtype=int32)
-    gbits = np.zeros(16, dtype=uint64)
+    gbits = np.zeros(n_words, dtype=uint64)
     for k in range(n_items):
         idx = s_idx_desc[k]
         if p1[idx] == 1 or p2[idx] == 1:
             gid = item_groups[idx]
-            conflict = False
-            if 0 <= gid < 1024:
-                for m in range(16):
-                    if gbits[m] & conflict_masks[gid, m]:
-                        conflict = True
-                        break
+            conflict = _has_conflict_with_active_numba(
+                gid, gbits, conflict_masks, n_groups, n_words
+            )
             if conflict:
                 continue
             if (
@@ -420,11 +436,10 @@ def solve_knapsack_evolution_numba(
     max_generations=1000,
     iter_per_ind=1000000,
     patience=10,
-    min_generations=30,
     base_seed=42,
 ):
     total_pop = pop_size + rand_add_size + crossover_size
-    conflict_masks = _init_masks_numba(conflict_pairs)
+    conflict_masks = _init_masks_numba(conflict_pairs, n_groups)
     densities = values.astype(float64) / (
         1.0 + weights[:, 0] + weights[:, 1] + weights[:, 2]
     )
@@ -472,7 +487,7 @@ def solve_knapsack_evolution_numba(
         else:
             no_improvement += 1
 
-        if (gen + 1) >= min_generations and no_improvement >= patience:
+        if no_improvement >= patience:
             break
 
         for i in range(pop_size):
@@ -634,7 +649,7 @@ def _solve_sa_timed_py(
     verbose=True,
 ):
     deadline = time.perf_counter() + timeout_sec
-    conflict_masks = _init_masks_numba(conflict_pairs)
+    conflict_masks = _init_masks_numba(conflict_pairs, n_groups)
     best_score = -1.0
     best_sol = np.zeros(n_items, dtype=np.int8)
     seed_base = int(time.time_ns() & 0xFFFFFFFF)
@@ -691,7 +706,7 @@ def _solve_evolution_timed_py(
 ):
     deadline = time.perf_counter() + timeout_sec
     total_pop = pop_size + rand_add_size + crossover_size
-    conflict_masks = _init_masks_numba(conflict_pairs)
+    conflict_masks = _init_masks_numba(conflict_pairs, n_groups)
     s_idx_desc = _compute_s_idx_desc(values, weights)
     pops = np.zeros((total_pop, n_items), dtype=np.int8)
     scores = np.zeros(total_pop, dtype=np.float64)
@@ -766,7 +781,7 @@ def _warmup_numba_kernels(
     bonus_val,
 ):
     """JIT初回コンパイルを先に済ませ、timeout計測に含めない。"""
-    conflict_masks = _init_masks_numba(conflict_pairs)
+    conflict_masks = _init_masks_numba(conflict_pairs, n_groups)
 
     # SAカーネルを軽量条件で1回呼び、コンパイルを完了させる
     _run_sa_numba(
@@ -884,7 +899,7 @@ class NumbaBenchmarker:
         else:
             print(f"--- 1. Starting Numba Single SA (iters={iterations}) ---")
             st1 = time.perf_counter()
-            mask = _init_masks_numba(confs)
+            mask = _init_masks_numba(confs, n_groups)
             score_sa, sol_sa = _run_sa_numba(
                 np.zeros(n_items, dtype=np.int8),
                 v,
@@ -978,7 +993,6 @@ class NumbaBenchmarker:
                 max_generations=1000,
                 iter_per_ind=iterations,
                 patience=patience,
-                min_generations=30,
                 base_seed=evo_seed,
             )
         el2 = time.perf_counter() - st2
