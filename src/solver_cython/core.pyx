@@ -49,6 +49,49 @@ cdef inline double _bonus_on_rem(int gc_val, int bonus_t1, int bonus_t2, int bon
         return bonus_val
     return 0.0
 
+cdef inline double _sa_temperature(int it, int iterations, int gen) noexcept nogil:
+    """終盤で冷え切りすぎない下限付き二次冷却。"""
+    cdef double progress, cool, base_temp
+    if iterations <= 0:
+        return 1.0
+    progress = <double>it / <double>iterations
+    cool = 1.0 - progress
+    base_temp = 1.0 / (1.0 + 0.03 * gen)
+    return base_temp * (0.03 + 0.97 * cool * cool)
+
+cdef inline void _apply_remove_only(
+    int idx,
+    char* sol,
+    int[:] values,
+    int[:, :] weights,
+    int[:] item_groups,
+    int bonus_t1,
+    int bonus_t2,
+    int bonus_t3,
+    double bonus_val,
+    int* cur_w,
+    int* gc_buf,
+    unsigned long long* g_bits,
+    double* cur_val_sum_ptr,
+    double* cur_bonus_ptr,
+) noexcept nogil:
+    cdef int k, g_rem
+    cdef double bonus_diff = 0.0
+    if sol[idx] == 0:
+        return
+    g_rem = item_groups[idx]
+    if g_rem >= 0:
+        bonus_diff = -_bonus_on_rem(gc_buf[g_rem], bonus_t1, bonus_t2, bonus_t3, bonus_val)
+    sol[idx] = 0
+    for k in range(3):
+        cur_w[k] -= weights[idx, k]
+    if g_rem >= 0:
+        gc_buf[g_rem] -= 1
+        if gc_buf[g_rem] == 0 and g_rem < 1024:
+            g_bits[g_rem // 64] &= ~(1ULL << (g_rem % 64))
+    cur_val_sum_ptr[0] -= <double>values[idx]
+    cur_bonus_ptr[0] += bonus_diff
+
 # ---------------------------------------------------------
 # 2. SAコアエンジン 
 # ---------------------------------------------------------
@@ -60,7 +103,8 @@ cdef void _run_sa_on_block(
     int bonus_t1, int bonus_t2, int bonus_t3, double bonus_val,
     int* gc_buf, char* best_sol_buf, unsigned int seed
 ) noexcept nogil:
-    cdef int it, j, k, add_idx, rem_idx, g_add, g_rem, conflict
+    cdef int it, j, k, add_idx, rem_idx, rem_idx2, rem_idx3, g_add, g_rem, conflict
+    cdef int remove_count
     cdef double r, temp, cur_val_sum, cur_bonus, bonus_diff, diff
     cdef unsigned long long g_bits[16]
     cdef int cur_w[3]
@@ -112,7 +156,7 @@ cdef void _run_sa_on_block(
 
     # --- SAメインループ ---
     for it in range(iterations):
-        temp = (1.0 - (<double>it / iterations)) * (1.0 / (1.0 + gen * 0.1))
+        temp = _sa_temperature(it, iterations, gen)
         add_idx = xorshift_next(&xsr) % n_items
         g_add = item_groups[add_idx]
         r = xorshift_double(&xsr)
@@ -190,18 +234,43 @@ cdef void _run_sa_on_block(
         else:
             # 削除
             if r < 0.02 * temp:
-                g_rem = item_groups[add_idx]
-                bonus_diff = 0.0
-                if g_rem >= 0:
-                    bonus_diff = -_bonus_on_rem(gc_buf[g_rem], bonus_t1, bonus_t2, bonus_t3, bonus_val)
-                sol[add_idx] = 0
-                for k in range(3): cur_w[k] -= weights[add_idx, k]
-                if g_rem >= 0:
-                    gc_buf[g_rem] -= 1
-                    if gc_buf[g_rem] == 0 and g_rem < 1024:
-                        g_bits[g_rem // 64] &= ~(1ULL << (g_rem % 64))
-                cur_val_sum -= <double>values[add_idx]
-                cur_bonus += bonus_diff
+                remove_count = 1
+                rem_idx2 = -1
+                rem_idx3 = -1
+                if r < 0.006 * temp:
+                    remove_count = 3
+                elif r < 0.012 * temp:
+                    remove_count = 2
+
+                _apply_remove_only(
+                    add_idx,
+                    sol, values, weights, item_groups,
+                    bonus_t1, bonus_t2, bonus_t3, bonus_val,
+                    &cur_w[0], gc_buf, &g_bits[0],
+                    &cur_val_sum, &cur_bonus,
+                )
+
+                if remove_count >= 2:
+                    rem_idx2 = xorshift_next(&xsr) % n_items
+                    if rem_idx2 != add_idx and sol[rem_idx2] == 1:
+                        _apply_remove_only(
+                            rem_idx2,
+                            sol, values, weights, item_groups,
+                            bonus_t1, bonus_t2, bonus_t3, bonus_val,
+                            &cur_w[0], gc_buf, &g_bits[0],
+                            &cur_val_sum, &cur_bonus,
+                        )
+
+                if remove_count >= 3:
+                    rem_idx3 = xorshift_next(&xsr) % n_items
+                    if rem_idx3 != add_idx and rem_idx3 != rem_idx2 and sol[rem_idx3] == 1:
+                        _apply_remove_only(
+                            rem_idx3,
+                            sol, values, weights, item_groups,
+                            bonus_t1, bonus_t2, bonus_t3, bonus_val,
+                            &cur_w[0], gc_buf, &g_bits[0],
+                            &cur_val_sum, &cur_bonus,
+                        )
 
         if cur_val_sum + cur_bonus > best_total:
             best_total = cur_val_sum + cur_bonus
