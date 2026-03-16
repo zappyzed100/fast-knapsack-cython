@@ -121,21 +121,16 @@ cdef void _run_sa_on_block(
     int n_items, int n_groups, int group_max, int iterations,
     unsigned long long[:, :] conflict_masks, int gen,
     int bonus_t1, int bonus_t2, int bonus_t3, double bonus_val,
-    int* gc_buf, char* best_sol_buf, unsigned int seed
+    int* gc_buf, char* best_sol_buf, unsigned long long* g_bits, unsigned int seed
 ) noexcept nogil:
     cdef int it, j, k, add_idx, rem_idx, rem_idx2, rem_idx3, g_add, g_rem, conflict
     cdef int remove_count
     cdef double r, temp, cur_val_sum, cur_bonus, bonus_diff, diff
     cdef int n_words
-    cdef unsigned long long* g_bits
     cdef int cur_w[3]
     cdef xorshift_state xsr
     xsr.a = seed
     n_words = _conflict_word_count(n_groups)
-    g_bits = <unsigned long long*>malloc(n_words * sizeof(unsigned long long))
-    if g_bits == NULL:
-        score_ptr[0] = -1.0
-        return
     
     # --- 状態の完全リセットと初期解の修復 ---
     memset(g_bits, 0, n_words * sizeof(unsigned long long))
@@ -300,7 +295,6 @@ cdef void _run_sa_on_block(
 
     memcpy(sol, best_sol_buf, n_items * sizeof(char))
     score_ptr[0] = best_total
-    free(g_bits)
 
 # ---------------------------------------------------------
 # 3. Greedy交叉 
@@ -376,84 +370,123 @@ def solve_knapsack_sa_parallel(
     cdef int no_improvement = 0
     cdef unsigned int base_seed = <unsigned int>c_time(NULL)
     cdef xorshift_state sel_rng
+    cdef int n_words = _conflict_word_count(n_groups)
+    cdef char* pops_buf = NULL
+    cdef char* temp_pops_buf = NULL
+    cdef int* gc_buffers_buf = NULL
+    cdef char* best_sol_buffers_buf = NULL
+    cdef unsigned long long* g_bits_buffers_buf = NULL
+    result_sol_arr = np.empty(n_items, dtype=np.int8)
+    cdef char[:] result_sol = result_sol_arr
     deadline = _time.perf_counter() + timeout_sec if timeout_sec > 0.0 else None
 
-    cdef char[:, :] pops = np.zeros((total_pop, n_items), dtype=np.int8)
     scores_arr = np.zeros(total_pop, dtype=np.float64)
     cdef double[:] scores = scores_arr
-    cdef char[:, :] temp_pops = np.zeros((pop_size, n_items), dtype=np.int8)
     cdef double[:] temp_scores = np.zeros(pop_size, dtype=np.float64)
     cx1_arr = np.empty(crossover_size, dtype=np.int32)
     cx2_arr = np.empty(crossover_size, dtype=np.int32)
     cx1 = cx1_arr
     cx2 = cx2_arr
 
-    cdef int** gc_buffers = <int**>malloc(total_pop * sizeof(int*))
-    for i in range(total_pop):
-        gc_buffers[i] = <int*>malloc(n_groups * sizeof(int))
+    pops_buf = <char*>malloc(total_pop * n_items * sizeof(char))
+    temp_pops_buf = <char*>malloc(pop_size * n_items * sizeof(char))
+    gc_buffers_buf = <int*>malloc(total_pop * n_groups * sizeof(int))
+    best_sol_buffers_buf = <char*>malloc(total_pop * n_items * sizeof(char))
+    g_bits_buffers_buf = <unsigned long long*>malloc(total_pop * n_words * sizeof(unsigned long long))
+    if pops_buf == NULL or temp_pops_buf == NULL or gc_buffers_buf == NULL or best_sol_buffers_buf == NULL or g_bits_buffers_buf == NULL:
+        free(pops_buf)
+        free(temp_pops_buf)
+        free(gc_buffers_buf)
+        free(best_sol_buffers_buf)
+        free(g_bits_buffers_buf)
+        raise MemoryError()
 
-    cdef char** best_sol_buffers = <char**>malloc(total_pop * sizeof(char*))
-    for i in range(total_pop):
-        best_sol_buffers[i] = <char*>malloc(n_items * sizeof(char))
+    memset(pops_buf, 0, total_pop * n_items * sizeof(char))
+    memset(temp_pops_buf, 0, pop_size * n_items * sizeof(char))
 
     densities = np.array(values) / (1.0 + np.sum(np.array(weights), axis=1))
     cdef int[:] s_idx_desc = np.argsort(-densities).astype(np.int32)
 
     cdef unsigned long long[:, :] conflict_masks = _build_conflict_masks(conflict_pairs, n_groups)
+    try:
+        for gen in range(max_generations):
+            # 1. 新規個体
+            for i in prange(pop_size, pop_size + rand_add_size, nogil=True):
+                memset(&pops_buf[i * n_items], 0, n_items * sizeof(char))
+                _run_sa_on_block(
+                    &pops_buf[i * n_items], &scores[i],
+                    values, weights, capacities, item_groups,
+                    n_items, n_groups, group_max, iter_per_ind,
+                    conflict_masks, gen,
+                    bonus_t1, bonus_t2, bonus_t3, bonus_val,
+                    &gc_buffers_buf[i * n_groups], &best_sol_buffers_buf[i * n_items], &g_bits_buffers_buf[i * n_words],
+                    base_seed ^ <unsigned int>(i * 777 + gen)
+                )
 
-    for gen in range(max_generations):
-        # 1. 新規個体
-        for i in prange(pop_size, pop_size + rand_add_size, nogil=True):
-            memset(&pops[i, 0], 0, n_items * sizeof(char))
-            _run_sa_on_block(&pops[i, 0], &scores[i], values, weights, capacities, item_groups, n_items, n_groups, group_max, iter_per_ind, conflict_masks, gen, bonus_t1, bonus_t2, bonus_t3, bonus_val, gc_buffers[i], best_sol_buffers[i], base_seed ^ <unsigned int>(i * 777 + gen))
+            # 2. 交叉 (Python/NumPy RNG 呼び出しを避け、C側乱数で親を選択)
+            sel_rng.a = base_seed ^ <unsigned int>(gen * 1000003 + 97)
+            for i in range(crossover_size):
+                cx1[i] = <int>(xorshift_next(&sel_rng) % <unsigned int>pool_size)
+                cx2[i] = <int>(xorshift_next(&sel_rng) % <unsigned int>pool_size)
+            for i in prange(pop_size + rand_add_size, total_pop, nogil=True):
+                _greedy_crossover(
+                    &pops_buf[<int>cx1[i - pop_size - rand_add_size] * n_items],
+                    &pops_buf[<int>cx2[i - pop_size - rand_add_size] * n_items],
+                    &pops_buf[i * n_items],
+                    item_groups, weights, capacities, conflict_masks,
+                    n_items, n_groups, group_max, s_idx_desc,
+                    &gc_buffers_buf[i * n_groups]
+                )
 
-        # 2. 交叉 (Python/NumPy RNG 呼び出しを避け、C側乱数で親を選択)
-        sel_rng.a = base_seed ^ <unsigned int>(gen * 1000003 + 97)
-        for i in range(crossover_size):
-            cx1[i] = <int>(xorshift_next(&sel_rng) % <unsigned int>pool_size)
-            cx2[i] = <int>(xorshift_next(&sel_rng) % <unsigned int>pool_size)
-        for i in prange(pop_size + rand_add_size, total_pop, nogil=True):
-            _greedy_crossover(&pops[<int>cx1[i - pop_size - rand_add_size], 0], &pops[<int>cx2[i - pop_size - rand_add_size], 0], &pops[i, 0], item_groups, weights, capacities, conflict_masks, n_items, n_groups, group_max, s_idx_desc, gc_buffers[i])
+            # 3. ブラッシュアップ SA
+            for i in prange(total_pop, nogil=True):
+                _run_sa_on_block(
+                    &pops_buf[i * n_items], &scores[i],
+                    values, weights, capacities, item_groups,
+                    n_items, n_groups, group_max, iter_per_ind,
+                    conflict_masks, gen,
+                    bonus_t1, bonus_t2, bonus_t3, bonus_val,
+                    &gc_buffers_buf[i * n_groups], &best_sol_buffers_buf[i * n_items], &g_bits_buffers_buf[i * n_words],
+                    base_seed ^ <unsigned int>(i * 123 + gen)
+                )
 
-        # 3. ブラッシュアップ SA
-        for i in prange(total_pop, nogil=True):
-            _run_sa_on_block(&pops[i, 0], &scores[i], values, weights, capacities, item_groups, n_items, n_groups, group_max, iter_per_ind, conflict_masks, gen, bonus_t1, bonus_t2, bonus_t3, bonus_val, gc_buffers[i], best_sol_buffers[i], base_seed ^ <unsigned int>(i * 123 + gen))
+            sorted_indices = np.argsort(-scores_arr)
+            best_idx = sorted_indices[0]
+            if scores[best_idx] > last_best:
+                last_best = scores[best_idx]
+                no_improvement = 0
+                if verbose:
+                    print(f"Gen {gen:03d}: Improved! Best Score = {last_best:.1f}")
+            else:
+                no_improvement += 1
+                if verbose:
+                    print(f"Gen {gen:03d}: No Improvement ({no_improvement}/{patience})")
 
-        sorted_indices = np.argsort(-scores_arr)
-        best_idx = sorted_indices[0]
-        if scores[best_idx] > last_best:
-            last_best = scores[best_idx]
-            no_improvement = 0
-            if verbose:
-                print(f"Gen {gen:03d}: Improved! Best Score = {last_best:.1f}")
-        else:
-            no_improvement += 1
-            if verbose:
-                print(f"Gen {gen:03d}: No Improvement ({no_improvement}/{patience})")
+            # 世代交代
+            for i in range(pop_size):
+                s_idx = sorted_indices[i]
+                memcpy(&temp_pops_buf[i * n_items], &pops_buf[s_idx * n_items], n_items * sizeof(char))
+                temp_scores[i] = scores[s_idx]
+            for i in range(pop_size):
+                memcpy(&pops_buf[i * n_items], &temp_pops_buf[i * n_items], n_items * sizeof(char))
+                scores[i] = temp_scores[i]
 
-        # 世代交代
-        for i in range(pop_size):
-            s_idx = sorted_indices[i]
-            memcpy(&temp_pops[i, 0], &pops[s_idx, 0], n_items * sizeof(char))
-            temp_scores[i] = scores[s_idx]
-        for i in range(pop_size):
-            memcpy(&pops[i, 0], &temp_pops[i, 0], n_items * sizeof(char))
-            scores[i] = temp_scores[i]
-        
-        if deadline is not None and _time.perf_counter() >= deadline:
-            if verbose:
-                print(f"Gen {gen:03d}: Time limit reached.")
-            break
+            if deadline is not None and _time.perf_counter() >= deadline:
+                if verbose:
+                    print(f"Gen {gen:03d}: Time limit reached.")
+                break
 
-        if deadline is None and no_improvement >= patience:
-            break
+            if deadline is None and no_improvement >= patience:
+                break
 
-    for i in range(total_pop):
-        free(gc_buffers[i])
-        free(best_sol_buffers[i])
-    free(gc_buffers)
-    free(best_sol_buffers)
-    return last_best, np.array(pops[0])
+        memcpy(&result_sol[0], &pops_buf[0], n_items * sizeof(char))
+        return last_best, result_sol_arr
+    finally:
+        free(pops_buf)
+        free(temp_pops_buf)
+        free(gc_buffers_buf)
+        free(best_sol_buffers_buf)
+        free(g_bits_buffers_buf)
 
 # ---------------------------------------------------------
 # 5. 単体SA公開ラッパー (_run_sa_on_block を1回呼び出すだけ)
@@ -465,10 +498,17 @@ def solve_knapsack_sa_single(
     int iterations, unsigned int seed=42
 ):
     cdef unsigned long long[:, :] conflict_masks = _build_conflict_masks(conflict_pairs, n_groups)
+    cdef int n_words = _conflict_word_count(n_groups)
     cdef char[:] sol = np.zeros(n_items, dtype=np.int8)
     cdef int* gc_buf = <int*>malloc(n_groups * sizeof(int))
     cdef char* best_sol_buf = <char*>malloc(n_items * sizeof(char))
+    cdef unsigned long long* g_bits_buf = <unsigned long long*>malloc(n_words * sizeof(unsigned long long))
     cdef double score = -1.0
+    if gc_buf == NULL or best_sol_buf == NULL or g_bits_buf == NULL:
+        free(gc_buf)
+        free(best_sol_buf)
+        free(g_bits_buf)
+        raise MemoryError()
     try:
         _run_sa_on_block(
             &sol[0], &score,
@@ -476,11 +516,12 @@ def solve_knapsack_sa_single(
             n_items, n_groups, group_max, iterations,
             conflict_masks, 0,
             bonus_t1, bonus_t2, bonus_t3, bonus_val,
-            gc_buf, best_sol_buf, seed
+            gc_buf, best_sol_buf, g_bits_buf, seed
         )
     finally:
         free(gc_buf)
         free(best_sol_buf)
+        free(g_bits_buf)
     return score, np.array(sol)
 
 # ---------------------------------------------------------
@@ -500,14 +541,21 @@ def solve_knapsack_sa_timed(
     cdef int run_idx = 0
 
     cdef unsigned long long[:, :] conflict_masks = _build_conflict_masks(conflict_pairs, n_groups)
+    cdef int n_words = _conflict_word_count(n_groups)
 
     cdef char[:] sol = np.zeros(n_items, dtype=np.int8)
     cdef char[:] best_sol_global = np.zeros(n_items, dtype=np.int8)
     cdef int* gc_buf = <int*>malloc(n_groups * sizeof(int))
     cdef char* best_sol_buf = <char*>malloc(n_items * sizeof(char))
+    cdef unsigned long long* g_bits_buf = <unsigned long long*>malloc(n_words * sizeof(unsigned long long))
 
     cdef unsigned int seed_base = <unsigned int>c_time(NULL)
     deadline = _time.perf_counter() + timeout_sec
+    if gc_buf == NULL or best_sol_buf == NULL or g_bits_buf == NULL:
+        free(gc_buf)
+        free(best_sol_buf)
+        free(g_bits_buf)
+        raise MemoryError()
 
     try:
         while _time.perf_counter() < deadline:
@@ -519,7 +567,7 @@ def solve_knapsack_sa_timed(
                 n_items, n_groups, group_max, chunk_iter,
                 conflict_masks, run_idx,
                 bonus_t1, bonus_t2, bonus_t3, bonus_val,
-                gc_buf, best_sol_buf,
+                gc_buf, best_sol_buf, g_bits_buf,
                 seed_base ^ <unsigned int>(run_idx * 1000003)
             )
             if chunk_score > best_score_global:
@@ -531,5 +579,6 @@ def solve_knapsack_sa_timed(
     finally:
         free(gc_buf)
         free(best_sol_buf)
+        free(g_bits_buf)
 
     return best_score_global, np.array(best_sol_global)
