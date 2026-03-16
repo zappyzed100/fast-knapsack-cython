@@ -233,13 +233,13 @@ cdef void _run_sa_on_block(
                             g_bits[g_rem // 64] |= (1ULL << (g_rem % 64))
         else:
             # 削除
-            if r < 0.10 * temp:
+            if r < 0.02 * temp:
                 remove_count = 1
                 rem_idx2 = -1
                 rem_idx3 = -1
-                if r < 0.03 * temp:
+                if r < 0.006 * temp:
                     remove_count = 3
-                elif r < 0.06 * temp:
+                elif r < 0.012 * temp:
                     remove_count = 2
 
                 _apply_remove_only(
