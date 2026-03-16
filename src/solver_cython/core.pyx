@@ -25,14 +25,33 @@ cdef inline double xorshift_double(xorshift_state* state) noexcept nogil:
 # ---------------------------------------------------------
 # 1b. 共通ヘルパー: コンフリクトマスク構築 / ボーナス差分計算
 # ---------------------------------------------------------
-cdef unsigned long long[:, :] _build_conflict_masks(int[:, :] conflict_pairs):
-    """conflict_pairs から (1024, 16) のビットマスクテーブルを構築して返す。"""
-    cdef unsigned long long[:, :] masks = np.zeros((1024, 16), dtype=np.uint64)
+cdef inline int _conflict_word_count(int n_groups) noexcept nogil:
+    return (n_groups + 63) // 64
+
+cdef inline int _has_conflict_with_active(
+    int gid,
+    unsigned long long* g_bits,
+    unsigned long long[:, :] conflict_masks,
+    int n_groups,
+    int n_words,
+) noexcept nogil:
+    cdef int k
+    if gid < 0 or gid >= n_groups:
+        return 0
+    for k in range(n_words):
+        if g_bits[k] & conflict_masks[gid, k]:
+            return 1
+    return 0
+
+cdef unsigned long long[:, :] _build_conflict_masks(int[:, :] conflict_pairs, int n_groups):
+    """conflict_pairs から (n_groups, ceil(n_groups / 64)) のビットマスクを構築して返す。"""
+    cdef int n_words = _conflict_word_count(n_groups)
+    cdef unsigned long long[:, :] masks = np.zeros((n_groups, n_words), dtype=np.uint64)
     cdef int i, u, v
     for i in range(conflict_pairs.shape[0]):
         u = conflict_pairs[i, 0]
         v = conflict_pairs[i, 1]
-        if u < 1024 and v < 1024:
+        if 0 <= u < n_groups and 0 <= v < n_groups:
             masks[u, v // 64] |= (1ULL << (v % 64))
             masks[v, u // 64] |= (1ULL << (u % 64))
     return masks
@@ -65,6 +84,7 @@ cdef inline void _apply_remove_only(
     int[:] values,
     int[:, :] weights,
     int[:] item_groups,
+    int n_groups,
     int bonus_t1,
     int bonus_t2,
     int bonus_t3,
@@ -87,7 +107,7 @@ cdef inline void _apply_remove_only(
         cur_w[k] -= weights[idx, k]
     if g_rem >= 0:
         gc_buf[g_rem] -= 1
-        if gc_buf[g_rem] == 0 and g_rem < 1024:
+        if gc_buf[g_rem] == 0 and g_rem < n_groups:
             g_bits[g_rem // 64] &= ~(1ULL << (g_rem % 64))
     cur_val_sum_ptr[0] -= <double>values[idx]
     cur_bonus_ptr[0] += bonus_diff
@@ -106,13 +126,19 @@ cdef void _run_sa_on_block(
     cdef int it, j, k, add_idx, rem_idx, rem_idx2, rem_idx3, g_add, g_rem, conflict
     cdef int remove_count
     cdef double r, temp, cur_val_sum, cur_bonus, bonus_diff, diff
-    cdef unsigned long long g_bits[16]
+    cdef int n_words
+    cdef unsigned long long* g_bits
     cdef int cur_w[3]
     cdef xorshift_state xsr
     xsr.a = seed
+    n_words = _conflict_word_count(n_groups)
+    g_bits = <unsigned long long*>malloc(n_words * sizeof(unsigned long long))
+    if g_bits == NULL:
+        score_ptr[0] = -1.0
+        return
     
     # --- 状態の完全リセットと初期解の修復 ---
-    memset(g_bits, 0, sizeof(g_bits))
+    memset(g_bits, 0, n_words * sizeof(unsigned long long))
     memset(cur_w, 0, sizeof(cur_w))
     memset(gc_buf, 0, n_groups * sizeof(int))
     cur_val_sum = 0.0
@@ -121,11 +147,8 @@ cdef void _run_sa_on_block(
         if sol[j] == 1:
             g_add = item_groups[j]
             conflict = 0
-            if 0 <= g_add < 1024:
-                for k in range(16):
-                    if g_bits[k] & conflict_masks[g_add, k]:
-                        conflict = 1
-                        break
+            if _has_conflict_with_active(g_add, g_bits, conflict_masks, n_groups, n_words):
+                conflict = 1
             
             # 制約違反（重量、排他、上限）がある場合は deselect
             if (conflict or 
@@ -139,7 +162,7 @@ cdef void _run_sa_on_block(
                 for k in range(3): cur_w[k] += weights[j, k]
                 if g_add >= 0:
                     gc_buf[g_add] += 1
-                    if g_add < 1024:
+                    if g_add < n_groups:
                         g_bits[g_add // 64] |= (1ULL << (g_add % 64))
 
     cur_bonus = 0.0
@@ -168,10 +191,8 @@ cdef void _run_sa_on_block(
                 cur_w[2] + weights[add_idx, 2] <= capacities[2]):
                 
                 conflict = 0
-                if 0 <= g_add < 1024:
-                    for k in range(16):
-                        if g_bits[k] & conflict_masks[g_add, k]:
-                            conflict = 1; break
+                if _has_conflict_with_active(g_add, g_bits, conflict_masks, n_groups, n_words):
+                    conflict = 1
                 
                 if not conflict and (g_add < 0 or gc_buf[g_add] < group_max):
                     bonus_diff = 0.0
@@ -184,7 +205,7 @@ cdef void _run_sa_on_block(
                         for k in range(3): cur_w[k] += weights[add_idx, k]
                         if g_add >= 0:
                             gc_buf[g_add] += 1
-                            if g_add < 1024:
+                            if g_add < n_groups:
                                 g_bits[g_add // 64] |= (1ULL << (g_add % 64))
                         cur_val_sum += <double>values[add_idx]
                         cur_bonus += bonus_diff
@@ -198,14 +219,12 @@ cdef void _run_sa_on_block(
                         cur_w[1] - weights[rem_idx, 1] + weights[add_idx, 1] <= capacities[1] and
                         cur_w[2] - weights[rem_idx, 2] + weights[add_idx, 2] <= capacities[2]):
                         
-                        if 0 <= g_rem < 1024 and gc_buf[g_rem] == 1:
+                        if 0 <= g_rem < n_groups and gc_buf[g_rem] == 1:
                             g_bits[g_rem // 64] &= ~(1ULL << (g_rem % 64))
                         
                         conflict = 0
-                        if 0 <= g_add < 1024:
-                            for k in range(16):
-                                if g_bits[k] & conflict_masks[g_add, k]:
-                                    conflict = 1; break
+                        if _has_conflict_with_active(g_add, g_bits, conflict_masks, n_groups, n_words):
+                            conflict = 1
                         
                         # 同一グループ内交換なら上限チェックを緩和
                         if not conflict and (g_add < 0 or gc_buf[g_add] < (group_max + (1 if g_add == g_rem else 0))):
@@ -222,31 +241,32 @@ cdef void _run_sa_on_block(
                                 for k in range(3): cur_w[k] += weights[add_idx, k] - weights[rem_idx, k]
                                 if g_add >= 0: gc_buf[g_add] += 1
                                 if g_rem >= 0: gc_buf[g_rem] -= 1
-                                if 0 <= g_add < 1024: g_bits[g_add // 64] |= (1ULL << (g_add % 64))
+                                if 0 <= g_add < n_groups: g_bits[g_add // 64] |= (1ULL << (g_add % 64))
                                 cur_val_sum += <double>(values[add_idx] - values[rem_idx])
                                 cur_bonus += bonus_diff
                                 if cur_val_sum + cur_bonus > best_total:
                                     best_total = cur_val_sum + cur_bonus
                                     memcpy(best_sol_buf, sol, n_items * sizeof(char))
                                 continue
-                        if 0 <= g_rem < 1024 and gc_buf[g_rem] >= 1:
+                        if 0 <= g_rem < n_groups and gc_buf[g_rem] >= 1:
                             g_bits[g_rem // 64] |= (1ULL << (g_rem % 64))
         else:
             # 削除
-            if r < 0.02 * temp:
+            if r < 0.10 * temp:
                 remove_count = 1
                 rem_idx2 = -1
                 rem_idx3 = -1
-                if r < 0.006 * temp:
+                if r < 0.03 * temp:
                     remove_count = 3
-                elif r < 0.012 * temp:
+                elif r < 0.06 * temp:
                     remove_count = 2
 
                 _apply_remove_only(
                     add_idx,
                     sol, values, weights, item_groups,
+                    n_groups,
                     bonus_t1, bonus_t2, bonus_t3, bonus_val,
-                    &cur_w[0], gc_buf, &g_bits[0],
+                    &cur_w[0], gc_buf, g_bits,
                     &cur_val_sum, &cur_bonus,
                 )
 
@@ -256,8 +276,9 @@ cdef void _run_sa_on_block(
                         _apply_remove_only(
                             rem_idx2,
                             sol, values, weights, item_groups,
+                            n_groups,
                             bonus_t1, bonus_t2, bonus_t3, bonus_val,
-                            &cur_w[0], gc_buf, &g_bits[0],
+                            &cur_w[0], gc_buf, g_bits,
                             &cur_val_sum, &cur_bonus,
                         )
 
@@ -267,8 +288,9 @@ cdef void _run_sa_on_block(
                         _apply_remove_only(
                             rem_idx3,
                             sol, values, weights, item_groups,
+                            n_groups,
                             bonus_t1, bonus_t2, bonus_t3, bonus_val,
-                            &cur_w[0], gc_buf, &g_bits[0],
+                            &cur_w[0], gc_buf, g_bits,
                             &cur_val_sum, &cur_bonus,
                         )
 
@@ -278,6 +300,7 @@ cdef void _run_sa_on_block(
 
     memcpy(sol, best_sol_buf, n_items * sizeof(char))
     score_ptr[0] = best_total
+    free(g_bits)
 
 # ---------------------------------------------------------
 # 3. Greedy交叉 
@@ -290,19 +313,24 @@ cdef void _greedy_crossover(
     int[:] s_idx_desc, int* gc_buf
 ) noexcept nogil:
     cdef int k, idx, gid, m, conflict
+    cdef int n_words = _conflict_word_count(n_groups)
     cdef int cur_w[3]
-    cdef unsigned long long g_bits[16]
+    cdef unsigned long long* g_bits = <unsigned long long*>malloc(n_words * sizeof(unsigned long long))
+    if g_bits == NULL:
+        memset(gc_buf, 0, n_groups * sizeof(int))
+        memset(child, 0, n_items * sizeof(char))
+        return
     memset(cur_w, 0, sizeof(cur_w))
     memset(gc_buf, 0, n_groups * sizeof(int))
-    memset(g_bits, 0, sizeof(g_bits))
+    memset(g_bits, 0, n_words * sizeof(unsigned long long))
     memset(child, 0, n_items * sizeof(char))
     for k in range(n_items):
         idx = s_idx_desc[k]
         if p1[idx] == 1 or p2[idx] == 1:
             gid = item_groups[idx]
             conflict = 0
-            if gid >= 0 and gid < 1024:
-                for m in range(16):
+            if gid >= 0 and gid < n_groups:
+                for m in range(n_words):
                     if g_bits[m] & conflict_masks[gid, m]:
                         conflict = 1
                         break
@@ -315,8 +343,9 @@ cdef void _greedy_crossover(
                 for m in range(3): cur_w[m] += weights[idx, m]
                 if gid >= 0:
                     gc_buf[gid] += 1
-                    if gid < 1024:
+                    if gid < n_groups:
                         g_bits[gid // 64] |= (1ULL << (gid % 64))
+    free(g_bits)
 
 # ---------------------------------------------------------
 # 4. 並列進化計算メイン
@@ -370,7 +399,7 @@ def solve_knapsack_sa_parallel(
     densities = np.array(values) / (1.0 + np.sum(np.array(weights), axis=1))
     cdef int[:] s_idx_desc = np.argsort(-densities).astype(np.int32)
 
-    cdef unsigned long long[:, :] conflict_masks = _build_conflict_masks(conflict_pairs)
+    cdef unsigned long long[:, :] conflict_masks = _build_conflict_masks(conflict_pairs, n_groups)
 
     for gen in range(max_generations):
         # 1. 新規個体
@@ -435,7 +464,7 @@ def solve_knapsack_sa_single(
     int bonus_t1, int bonus_t2, int bonus_t3, double bonus_val,
     int iterations, unsigned int seed=42
 ):
-    cdef unsigned long long[:, :] conflict_masks = _build_conflict_masks(conflict_pairs)
+    cdef unsigned long long[:, :] conflict_masks = _build_conflict_masks(conflict_pairs, n_groups)
     cdef char[:] sol = np.zeros(n_items, dtype=np.int8)
     cdef int* gc_buf = <int*>malloc(n_groups * sizeof(int))
     cdef char* best_sol_buf = <char*>malloc(n_items * sizeof(char))
@@ -470,7 +499,7 @@ def solve_knapsack_sa_timed(
     cdef double best_score_global = -1.0
     cdef int run_idx = 0
 
-    cdef unsigned long long[:, :] conflict_masks = _build_conflict_masks(conflict_pairs)
+    cdef unsigned long long[:, :] conflict_masks = _build_conflict_masks(conflict_pairs, n_groups)
 
     cdef char[:] sol = np.zeros(n_items, dtype=np.int8)
     cdef char[:] best_sol_global = np.zeros(n_items, dtype=np.int8)
