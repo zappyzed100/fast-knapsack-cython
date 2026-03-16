@@ -16,7 +16,7 @@ if os.path.join(PROJECT_ROOT, "src") not in sys.path:
 # コンパイル済みのCythonモジュールをインポート
 from solver_cython.core import (
     solve_knapsack_sa_parallel,
-    solve_knapsack_sa,
+    solve_knapsack_sa_single,
     solve_knapsack_sa_timed,
 )
 from utils.solution_eval import (
@@ -112,15 +112,8 @@ class CythonBenchmarker:
             )
         else:
             print(f"--- 1. Starting Cython Single SA (iters={iterations}) ---")
-            rand_add = np.random.randint(0, self.n_items, size=iterations).astype(
-                np.int32
-            )
-            rand_rem = np.random.randint(0, self.n_items, size=iterations).astype(
-                np.int32
-            )
-            rand_flt = np.random.random(size=iterations).astype(np.float64)
             st1 = time.perf_counter()
-            score1, sol1 = solve_knapsack_sa(
+            score1, sol1 = solve_knapsack_sa_single(
                 self.val_arr,
                 self.weight_arr,
                 self.capacities,
@@ -134,9 +127,6 @@ class CythonBenchmarker:
                 int(self.bonus_thresholds[2]),
                 float(self.bonus_value),
                 iterations,
-                rand_add,
-                rand_rem,
-                rand_flt,
             )
         el1 = time.perf_counter() - st1
         eval1 = evaluate_solution(
