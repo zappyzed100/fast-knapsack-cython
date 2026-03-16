@@ -39,6 +39,16 @@ def _xs_double(state):
     return float64(_xs_next(state) & uint64(0xFFFFFFF)) / 268435456.0
 
 
+@njit(inline="always")
+def _bonus_on_add_numba(gc_val, bonus_t1, bonus_t2, bonus_t3):
+    return gc_val == bonus_t1 - 1 or gc_val == bonus_t2 - 1 or gc_val == bonus_t3 - 1
+
+
+@njit(inline="always")
+def _bonus_on_rem_numba(gc_val, bonus_t1, bonus_t2, bonus_t3):
+    return gc_val == bonus_t1 or gc_val == bonus_t2 or gc_val == bonus_t3
+
+
 # ---------------------------------------------------------
 # 2. 高速 SA エンジン (Cython 版の移植)
 # ---------------------------------------------------------
@@ -131,10 +141,8 @@ def _run_sa_numba(
                 if not conflict and (g_add < 0 or gc_buf[g_add] < group_max):
                     bonus_diff = 0.0
                     if g_add >= 0:
-                        if (
-                            gc_buf[g_add] == bonus_t1 - 1
-                            or gc_buf[g_add] == bonus_t2 - 1
-                            or gc_buf[g_add] == bonus_t3 - 1
+                        if _bonus_on_add_numba(
+                            gc_buf[g_add], bonus_t1, bonus_t2, bonus_t3
                         ):
                             bonus_diff = BONUS_VAL
 
@@ -179,17 +187,13 @@ def _run_sa_numba(
                             bonus_diff = 0.0
                             if g_add != g_rem:
                                 if g_rem >= 0:
-                                    if (
-                                        gc_buf[g_rem] == bonus_t1
-                                        or gc_buf[g_rem] == bonus_t2
-                                        or gc_buf[g_rem] == bonus_t3
+                                    if _bonus_on_rem_numba(
+                                        gc_buf[g_rem], bonus_t1, bonus_t2, bonus_t3
                                     ):
                                         bonus_diff -= BONUS_VAL
                                 if g_add >= 0:
-                                    if (
-                                        gc_buf[g_add] == bonus_t1 - 1
-                                        or gc_buf[g_add] == bonus_t2 - 1
-                                        or gc_buf[g_add] == bonus_t3 - 1
+                                    if _bonus_on_add_numba(
+                                        gc_buf[g_add], bonus_t1, bonus_t2, bonus_t3
                                     ):
                                         bonus_diff += BONUS_VAL
 
@@ -225,11 +229,7 @@ def _run_sa_numba(
                 g_rem = item_groups[add_idx]
                 bonus_diff = 0.0
                 if g_rem >= 0:
-                    if (
-                        gc_buf[g_rem] == bonus_t1
-                        or gc_buf[g_rem] == bonus_t2
-                        or gc_buf[g_rem] == bonus_t3
-                    ):
+                    if _bonus_on_rem_numba(gc_buf[g_rem], bonus_t1, bonus_t2, bonus_t3):
                         bonus_diff = -BONUS_VAL
                 sol[add_idx] = 0
                 for k in range(3):
@@ -306,7 +306,7 @@ def _greedy_crossover_numba(
     return child
 
 
-@njit(parallel=True)
+@njit
 def solve_knapsack_evolution_numba(
     initial_sol,
     values,
@@ -348,71 +348,29 @@ def solve_knapsack_evolution_numba(
     last_best = -1.0
     no_improvement = 0
     for gen in range(max_generations):
-        for i in prange(pop_size, pop_size + rand_add_size):
-            pops[i] = np.zeros(n_items, dtype=int8)
-            s, sol = _run_sa_numba(
-                pops[i],
-                values,
-                weights,
-                capacities,
-                item_groups,
-                n_items,
-                n_groups,
-                group_max,
-                iter_per_ind,
-                conflict_masks,
-                gen,
-                base_seed ^ (i * 777 + gen),
-                bonus_t1,
-                bonus_t2,
-                bonus_t3,
-                bonus_val,
-            )
-            scores[i] = s
-            pops[i] = sol
-
-        cx1 = np.random.randint(0, pop_size + rand_add_size, crossover_size).astype(
-            int32
+        _evolve_single_gen_numba(
+            pops,
+            scores,
+            values,
+            weights,
+            capacities,
+            item_groups,
+            n_items,
+            n_groups,
+            group_max,
+            iter_per_ind,
+            conflict_masks,
+            gen,
+            bonus_t1,
+            bonus_t2,
+            bonus_t3,
+            bonus_val,
+            pop_size,
+            rand_add_size,
+            crossover_size,
+            s_idx_desc,
+            base_seed,
         )
-        cx2 = np.random.randint(0, pop_size + rand_add_size, crossover_size).astype(
-            int32
-        )
-        for i in prange(crossover_size):
-            pop_idx = pop_size + rand_add_size + i
-            pops[pop_idx] = _greedy_crossover_numba(
-                pops[cx1[i]],
-                pops[cx2[i]],
-                item_groups,
-                weights,
-                capacities,
-                conflict_masks,
-                n_items,
-                n_groups,
-                group_max,
-                s_idx_desc,
-            )
-
-        for i in prange(total_pop):
-            s, sol = _run_sa_numba(
-                pops[i],
-                values,
-                weights,
-                capacities,
-                item_groups,
-                n_items,
-                n_groups,
-                group_max,
-                iter_per_ind,
-                conflict_masks,
-                gen,
-                base_seed ^ (i * 123 + gen),
-                bonus_t1,
-                bonus_t2,
-                bonus_t3,
-                bonus_val,
-            )
-            scores[i] = s
-            pops[i] = sol
 
         sorted_idx = np.argsort(-scores)
         if scores[sorted_idx[0]] > last_best:
@@ -558,6 +516,13 @@ def _evolve_single_gen_numba(
 # ---------------------------------------------------------
 # 5. Python レベルのタイムアウト付き実行関数
 # ---------------------------------------------------------
+def _compute_s_idx_desc(values, weights):
+    densities = values.astype(np.float64) / (
+        1.0 + weights[:, 0] + weights[:, 1] + weights[:, 2]
+    )
+    return np.argsort(-densities).astype(np.int32)
+
+
 def _solve_sa_timed_py(
     values,
     weights,
@@ -634,10 +599,7 @@ def _solve_evolution_timed_py(
     deadline = time.perf_counter() + timeout_sec
     total_pop = pop_size + rand_add_size + crossover_size
     conflict_masks = _init_masks_numba(conflict_pairs)
-    densities = values.astype(np.float64) / (
-        1.0 + weights[:, 0] + weights[:, 1] + weights[:, 2]
-    )
-    s_idx_desc = np.argsort(-densities).astype(np.int32)
+    s_idx_desc = _compute_s_idx_desc(values, weights)
     pops = np.zeros((total_pop, n_items), dtype=np.int8)
     scores = np.zeros(total_pop, dtype=np.float64)
     if np.any(initial_sol):
@@ -740,10 +702,7 @@ def _warmup_numba_kernels(
     total_pop = pop_size + rand_add_size + crossover_size
     pops = np.zeros((total_pop, n_items), dtype=np.int8)
     scores = np.zeros(total_pop, dtype=np.float64)
-    densities = values.astype(np.float64) / (
-        1.0 + weights[:, 0] + weights[:, 1] + weights[:, 2]
-    )
-    s_idx_desc = np.argsort(-densities).astype(np.int32)
+    s_idx_desc = _compute_s_idx_desc(values, weights)
     _evolve_single_gen_numba(
         pops,
         scores,
