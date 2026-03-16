@@ -23,7 +23,34 @@ cdef inline double xorshift_double(xorshift_state* state) noexcept nogil:
     return <double>(xorshift_next(state) & 0xFFFFFFF) / 268435456.0
 
 # ---------------------------------------------------------
-# 2. SAコアエンジン (不整合解消版)
+# 1b. 共通ヘルパー: コンフリクトマスク構築 / ボーナス差分計算
+# ---------------------------------------------------------
+cdef unsigned long long[:, :] _build_conflict_masks(int[:, :] conflict_pairs):
+    """conflict_pairs から (1024, 16) のビットマスクテーブルを構築して返す。"""
+    cdef unsigned long long[:, :] masks = np.zeros((1024, 16), dtype=np.uint64)
+    cdef int i, u, v
+    for i in range(conflict_pairs.shape[0]):
+        u = conflict_pairs[i, 0]
+        v = conflict_pairs[i, 1]
+        if u < 1024 and v < 1024:
+            masks[u, v // 64] |= (1ULL << (v % 64))
+            masks[v, u // 64] |= (1ULL << (u % 64))
+    return masks
+
+cdef inline double _bonus_on_add(int gc_val, int bonus_t1, int bonus_t2, int bonus_t3, double bonus_val) noexcept nogil:
+    """追加でボーナス閾値に到達する場合 bonus_val を返す。"""
+    if gc_val == bonus_t1 - 1 or gc_val == bonus_t2 - 1 or gc_val == bonus_t3 - 1:
+        return bonus_val
+    return 0.0
+
+cdef inline double _bonus_on_rem(int gc_val, int bonus_t1, int bonus_t2, int bonus_t3, double bonus_val) noexcept nogil:
+    """削除でボーナス閾値から外れる場合 bonus_val を返す。"""
+    if gc_val == bonus_t1 or gc_val == bonus_t2 or gc_val == bonus_t3:
+        return bonus_val
+    return 0.0
+
+# ---------------------------------------------------------
+# 2. SAコアエンジン 
 # ---------------------------------------------------------
 cdef void _run_sa_on_block(
     char* sol, double* score_ptr,
@@ -105,8 +132,7 @@ cdef void _run_sa_on_block(
                 if not conflict and (g_add < 0 or gc_buf[g_add] < group_max):
                     bonus_diff = 0.0
                     if g_add >= 0:
-                        if gc_buf[g_add] == bonus_t1 - 1 or gc_buf[g_add] == bonus_t2 - 1 or gc_buf[g_add] == bonus_t3 - 1:
-                            bonus_diff = bonus_val
+                        bonus_diff = _bonus_on_add(gc_buf[g_add], bonus_t1, bonus_t2, bonus_t3, bonus_val)
                     
                     diff = <double>values[add_idx] + bonus_diff
                     if diff > 0 or (temp > 0 and r < exp(diff / (temp * 100.0))):
@@ -142,11 +168,9 @@ cdef void _run_sa_on_block(
                             bonus_diff = 0.0
                             if g_add != g_rem:
                                 if g_rem >= 0:
-                                    if gc_buf[g_rem] == bonus_t1 or gc_buf[g_rem] == bonus_t2 or gc_buf[g_rem] == bonus_t3:
-                                        bonus_diff -= bonus_val
+                                    bonus_diff -= _bonus_on_rem(gc_buf[g_rem], bonus_t1, bonus_t2, bonus_t3, bonus_val)
                                 if g_add >= 0:
-                                    if gc_buf[g_add] == bonus_t1 - 1 or gc_buf[g_add] == bonus_t2 - 1 or gc_buf[g_add] == bonus_t3 - 1:
-                                        bonus_diff += bonus_val
+                                    bonus_diff += _bonus_on_add(gc_buf[g_add], bonus_t1, bonus_t2, bonus_t3, bonus_val)
                             
                             diff = <double>(values[add_idx] - values[rem_idx]) + bonus_diff
                             if diff > 0 or (temp > 0 and r < exp(diff / (temp * 100.0))):
@@ -169,8 +193,7 @@ cdef void _run_sa_on_block(
                 g_rem = item_groups[add_idx]
                 bonus_diff = 0.0
                 if g_rem >= 0:
-                    if gc_buf[g_rem] == bonus_t1 or gc_buf[g_rem] == bonus_t2 or gc_buf[g_rem] == bonus_t3:
-                        bonus_diff = -bonus_val
+                    bonus_diff = -_bonus_on_rem(gc_buf[g_rem], bonus_t1, bonus_t2, bonus_t3, bonus_val)
                 sol[add_idx] = 0
                 for k in range(3): cur_w[k] -= weights[add_idx, k]
                 if g_rem >= 0:
@@ -188,7 +211,7 @@ cdef void _run_sa_on_block(
     score_ptr[0] = best_total
 
 # ---------------------------------------------------------
-# 3. Greedy交叉 (そのまま)
+# 3. Greedy交叉 
 # ---------------------------------------------------------
 cdef void _greedy_crossover(
     char* p1, char* p2, char* child,
@@ -278,11 +301,7 @@ def solve_knapsack_sa_parallel(
     densities = np.array(values) / (1.0 + np.sum(np.array(weights), axis=1))
     cdef int[:] s_idx_desc = np.argsort(-densities).astype(np.int32)
 
-    cdef unsigned long long[:, :] conflict_masks = np.zeros((1024, 16), dtype=np.uint64)
-    for i in range(conflict_pairs.shape[0]):
-        if conflict_pairs[i, 0] < 1024 and conflict_pairs[i, 1] < 1024:
-            conflict_masks[conflict_pairs[i,0], conflict_pairs[i,1]//64] |= (1ULL << (conflict_pairs[i,1]%64))
-            conflict_masks[conflict_pairs[i,1], conflict_pairs[i,0]//64] |= (1ULL << (conflict_pairs[i,0]%64))
+    cdef unsigned long long[:, :] conflict_masks = _build_conflict_masks(conflict_pairs)
 
     for gen in range(max_generations):
         # 1. 新規個体
@@ -339,180 +358,35 @@ def solve_knapsack_sa_parallel(
     return last_best, np.array(pops[0])
 
 # ---------------------------------------------------------
-# 5. SAソルバー (修正版)
+# 5. 単体SA公開ラッパー (_run_sa_on_block を1回呼び出すだけ)
 # ---------------------------------------------------------
-def solve_knapsack_sa(
-    int[:] values, 
-    int[:, :] weights, 
-    int[:] capacities, 
-    int[:] item_groups,
-    int[:, :] conflict_pairs, 
-    int n_items, 
-    int n_groups, 
-    int group_max, 
-    int bonus_t1,
-    int bonus_t2,
-    int bonus_t3,
-    double bonus_val,
-    long long max_iter,
-    int[:] rand_add,
-    int[:] rand_rem,
-    double[:] rand_flt
+def solve_knapsack_sa_single(
+    int[:] values, int[:, :] weights, int[:] capacities, int[:] item_groups,
+    int[:, :] conflict_pairs, int n_items, int n_groups, int group_max,
+    int bonus_t1, int bonus_t2, int bonus_t3, double bonus_val,
+    int iterations, unsigned int seed=42
 ):
-    # コンフリクトマスク (グループビットマスク)
-    cdef unsigned long long[:, :] conflict_masks = np.zeros((1024, 16), dtype=np.uint64)
-    cdef unsigned long long g_bits[16]
-    memset(g_bits, 0, sizeof(g_bits))
-    
-    cdef int i, j, k, it, g_add, g_rem, add_idx, rem_idx, u, v
-    cdef int over_weight, w_ok, conflict
-    cdef double r_val, temp, diff, val_diff, current_bonus, bonus_diff
-
-    # マスク作成
-    for i in range(conflict_pairs.shape[0]):
-        u = conflict_pairs[i, 0]
-        v = conflict_pairs[i, 1]
-        if u < 1024 and v < 1024:
-            conflict_masks[u, v // 64] |= (1ULL << (v % 64))
-            conflict_masks[v, u // 64] |= (1ULL << (u % 64))
-
-    cdef char[:] current_sol = np.zeros(n_items, dtype=np.int8)
-    cdef int[:] group_counts = np.zeros(n_groups, dtype=np.int32)
-    cdef int cur_w[3]
-    memset(cur_w, 0, sizeof(cur_w))
-
-    cdef double current_score = 0.0
-    cdef double best_score = 0.0
-    cdef char[:] best_sol = np.zeros(n_items, dtype=np.int8)
-    
-    # ボーナスの初期計算
-    current_bonus = 0.0
-    # 初期解が0なので0
-
-    for it in range(max_iter):
-        add_idx = rand_add[it]
-        g_add = item_groups[add_idx]
-        temp = 1.0 - (<double>it / <double>max_iter) 
-        r_val = rand_flt[it]
-
-        if current_sol[add_idx] == 0:
-            # 1. 重みチェック
-            over_weight = 0
-            for j in range(3):
-                if cur_w[j] + weights[add_idx, j] > capacities[j]:
-                    over_weight = 1
-                    break
-
-            if over_weight:
-                # 入れ替え戦略
-                rem_idx = rand_rem[it]
-                if current_sol[rem_idx] == 1:
-                    g_rem = item_groups[rem_idx]
-                    w_ok = 1
-                    for j in range(3):
-                        if cur_w[j] - weights[rem_idx, j] + weights[add_idx, j] > capacities[j]:
-                            w_ok = 0
-                            break
-                    
-                    if w_ok:
-                        # 差分でのコンフリクト判定
-                        # 削除するグループが他に存在しない場合のみビットを一時的に落とす
-                        if 0 <= g_rem < 1024 and group_counts[g_rem] == 1:
-                            g_bits[g_rem // 64] &= ~(1ULL << (g_rem % 64))
-                        
-                        conflict = 0
-                        if 0 <= g_add < 1024:
-                            for k in range(16):
-                                if g_bits[k] & conflict_masks[g_add, k]:
-                                    conflict = 1
-                                    break
-                        
-                        if not conflict:
-                            # ボーナス差分計算
-                            bonus_diff = 0.0
-                            if g_add != g_rem:
-                                # 削除の影響
-                                if group_counts[g_rem] == bonus_t1 or group_counts[g_rem] == bonus_t2 or group_counts[g_rem] == bonus_t3:
-                                    bonus_diff -= bonus_val
-                                # 追加の影響
-                                if group_counts[g_add] == bonus_t1 - 1 or group_counts[g_add] == bonus_t2 - 1 or group_counts[g_add] == bonus_t3 - 1:
-                                    bonus_diff += bonus_val
-                            
-                            val_diff = <double>(values[add_idx] - values[rem_idx])
-                            diff = val_diff + bonus_diff
-                            
-                            if diff > 0 or (temp > 0 and r_val < exp(diff / (temp * 100.0))):
-                                current_sol[rem_idx] = 0
-                                current_sol[add_idx] = 1
-                                for j in range(3):
-                                    cur_w[j] += weights[add_idx, j] - weights[rem_idx, j]
-                                group_counts[g_add] += 1
-                                group_counts[g_rem] -= 1
-                                current_score += val_diff
-                                current_bonus += bonus_diff
-                                
-                                # ビット確定更新 (g_remのビットは事前クリア済み)
-                                if 0 <= g_add < 1024:
-                                    g_bits[g_add // 64] |= (1ULL << (g_add % 64))
-                                
-                                if current_score + current_bonus > best_score:
-                                    best_score = current_score + current_bonus
-                                    memcpy(&best_sol[0], &current_sol[0], n_items * sizeof(char))
-                                continue
-                        
-                        # 失敗時はビットを戻す
-                        if 0 <= g_rem < 1024 and group_counts[g_rem] >= 1:
-                            g_bits[g_rem // 64] |= (1ULL << (g_rem % 64))
-            
-            elif group_counts[g_add] < group_max:
-                # 単純追加
-                conflict = 0
-                if 0 <= g_add < 1024:
-                    for k in range(16):
-                        if g_bits[k] & conflict_masks[g_add, k]:
-                            conflict = 1
-                            break
-                if not conflict:
-                    bonus_diff = 0.0
-                    if group_counts[g_add] == bonus_t1 - 1 or group_counts[g_add] == bonus_t2 - 1 or group_counts[g_add] == bonus_t3 - 1:
-                        bonus_diff += bonus_val
-                    
-                    val_diff = <double>values[add_idx]
-                    diff = val_diff + bonus_diff
-                    
-                    if diff > 0 or (temp > 0 and r_val < exp(diff / (temp * 100.0))):
-                        current_sol[add_idx] = 1
-                        for j in range(3): cur_w[j] += weights[add_idx, j]
-                        group_counts[g_add] += 1
-                        current_score += val_diff
-                        current_bonus += bonus_diff
-                        if 0 <= g_add < 1024:
-                            g_bits[g_add // 64] |= (1ULL << (g_add % 64))
-                        
-                        if current_score + current_bonus > best_score:
-                            best_score = current_score + current_bonus
-                            memcpy(&best_sol[0], &current_sol[0], n_items * sizeof(char))
-        else:
-            # 削除
-            if r_val < 0.02 * temp:
-                g_rem = item_groups[add_idx]
-                bonus_diff = 0.0
-                if group_counts[g_rem] == bonus_t1 or group_counts[g_rem] == bonus_t2 or group_counts[g_rem] == bonus_t3:
-                    bonus_diff -= bonus_val
-                
-                current_sol[add_idx] = 0
-                for j in range(3): cur_w[j] -= weights[add_idx, j]
-                group_counts[g_rem] -= 1
-                current_score -= <double>values[add_idx]
-                current_bonus += bonus_diff
-                
-                if group_counts[g_rem] == 0 and 0 <= g_rem < 1024:
-                    g_bits[g_rem // 64] &= ~(1ULL << (g_rem % 64))
-
-    return best_score, np.array(best_sol)
+    cdef unsigned long long[:, :] conflict_masks = _build_conflict_masks(conflict_pairs)
+    cdef char[:] sol = np.zeros(n_items, dtype=np.int8)
+    cdef int* gc_buf = <int*>malloc(n_groups * sizeof(int))
+    cdef char* best_sol_buf = <char*>malloc(n_items * sizeof(char))
+    cdef double score = -1.0
+    try:
+        _run_sa_on_block(
+            &sol[0], &score,
+            values, weights, capacities, item_groups,
+            n_items, n_groups, group_max, iterations,
+            conflict_masks, 0,
+            bonus_t1, bonus_t2, bonus_t3, bonus_val,
+            gc_buf, best_sol_buf, seed
+        )
+    finally:
+        free(gc_buf)
+        free(best_sol_buf)
+    return score, np.array(sol)
 
 # ---------------------------------------------------------
-# 6. 時間指定SAソルバー (マルチスタート・外部乱数配列不要)
+# 6. 時間指定SAソルバー
 # ---------------------------------------------------------
 def solve_knapsack_sa_timed(
     int[:] values, int[:, :] weights, int[:] capacities, int[:] item_groups,
@@ -522,18 +396,12 @@ def solve_knapsack_sa_timed(
 ):
     """timeout_sec 秒間、SAをチャンク単位で繰り返して最良解を返す。"""
     import time as _time
-    cdef int i, u, v
+    cdef int i
     cdef double chunk_score = -1.0
     cdef double best_score_global = -1.0
     cdef int run_idx = 0
 
-    cdef unsigned long long[:, :] conflict_masks = np.zeros((1024, 16), dtype=np.uint64)
-    for i in range(conflict_pairs.shape[0]):
-        u = conflict_pairs[i, 0]
-        v = conflict_pairs[i, 1]
-        if u < 1024 and v < 1024:
-            conflict_masks[u, v // 64] |= (1ULL << (v % 64))
-            conflict_masks[v, u // 64] |= (1ULL << (u % 64))
+    cdef unsigned long long[:, :] conflict_masks = _build_conflict_masks(conflict_pairs)
 
     cdef char[:] sol = np.zeros(n_items, dtype=np.int8)
     cdef char[:] best_sol_global = np.zeros(n_items, dtype=np.int8)

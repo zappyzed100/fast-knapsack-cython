@@ -1,7 +1,7 @@
 from typing import Tuple
 import numpy as np
 
-def solve_knapsack_sa(
+def solve_knapsack_sa_single(
     values: np.ndarray,
     weights: np.ndarray,
     capacities: np.ndarray,
@@ -10,10 +10,12 @@ def solve_knapsack_sa(
     n_items: int,
     n_groups: int,
     group_max: int,
+    bonus_t1: int,
+    bonus_t2: int,
+    bonus_t3: int,
+    bonus_val: float,
     iterations: int,
-    rand_add: np.ndarray,
-    rand_rem: np.ndarray,
-    rand_flt: np.ndarray,
+    seed: int = 42,
 ) -> Tuple[float, np.ndarray]: ...
 def solve_knapsack_sa_parallel(
     values: np.ndarray,
