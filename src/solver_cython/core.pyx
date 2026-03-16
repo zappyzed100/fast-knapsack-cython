@@ -49,6 +49,16 @@ cdef inline double _bonus_on_rem(int gc_val, int bonus_t1, int bonus_t2, int bon
         return bonus_val
     return 0.0
 
+cdef inline double _sa_temperature(int it, int iterations, int gen) noexcept nogil:
+    """終盤で冷え切りすぎない下限付き二次冷却。"""
+    cdef double progress, cool, base_temp
+    if iterations <= 0:
+        return 1.0
+    progress = <double>it / <double>iterations
+    cool = 1.0 - progress
+    base_temp = 1.0 / (1.0 + 0.03 * gen)
+    return base_temp * (0.03 + 0.97 * cool * cool)
+
 cdef inline void _apply_remove_only(
     int idx,
     char* sol,
@@ -146,7 +156,7 @@ cdef void _run_sa_on_block(
 
     # --- SAメインループ ---
     for it in range(iterations):
-        temp = (1.0 - (<double>it / iterations)) * (1.0 / (1.0 + gen * 0.1))
+        temp = _sa_temperature(it, iterations, gen)
         add_idx = xorshift_next(&xsr) % n_items
         g_add = item_groups[add_idx]
         r = xorshift_double(&xsr)
