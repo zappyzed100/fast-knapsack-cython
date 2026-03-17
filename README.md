@@ -1,4 +1,4 @@
-# fast-knapsack-cython
+# fast-knapsack-benchmark
 ## 実務制約付きナップサック問題に対する時間予算ベースの解法比較
 
 3行サマリ:

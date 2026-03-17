@@ -115,7 +115,7 @@ wheels = [
 ]
 
 [[package]]
-name = "fast-knapsack-cython"
+name = "fast-knapsack-benchmark"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
