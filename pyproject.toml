@@ -1,5 +1,5 @@
 [project]
-name = "fast-knapsack-cython"
+name = "fast-knapsack-benchmark"
 version = "0.1.0"
 description = "Time-budget benchmark of Cython, Numba, and MiniZinc solvers for a constrained large-scale knapsack problem."
 readme = "README.md"
